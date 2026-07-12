@@ -413,6 +413,59 @@ static void hunt_load_log(){
 	fclose(qf);
 }
 
+// does this look like a real callsign? base = prefix + digit(s) + 1-4 letter
+// suffix; compound calls take the longer side of the '/'. Rejects free-text
+// blobs like "YR50NADIA" (5-letter suffix) before we waste TX slots on them.
+static int plausible_call(const char *c){
+	char base[16];
+	int L = strlen(c);
+	if (L < 3 || L > 13)
+		return 0;
+	const char *slash = strchr(c, '/');
+	if (slash){
+		int a = slash - c, b = L - a - 1;
+		if (a > 12 || b > 12)
+			return 0;
+		if (a >= b){ strncpy(base, c, a); base[a] = 0; }
+		else strcpy(base, slash + 1);
+	}
+	else
+		strcpy(base, c);
+	int bl = strlen(base);
+	if (bl < 3 || bl > 8)
+		return 0;
+	int lastd = -1;
+	for (int i = 0; i < bl; i++){
+		if (!isalnum((unsigned char)base[i]))
+			return 0;
+		if (isdigit((unsigned char)base[i]))
+			lastd = i;
+	}
+	if (lastd < 0 || lastd == bl - 1)
+		return 0; // no digit, or ends in a digit
+	int suf = bl - lastd - 1;
+	if (suf > 4)
+		return 0; // suffix longer than any real call
+	for (int i = lastd + 1; i < bl; i++)
+		if (!isalpha((unsigned char)base[i]))
+			return 0;
+	return 1;
+}
+
+// maidenhead grid: AA00 or AA00xx
+static int plausible_grid(const char *g){
+	int L = strlen(g);
+	if (L != 4 && L != 6)
+		return 0;
+	if (g[0] < 'A' || g[0] > 'R' || g[1] < 'A' || g[1] > 'R')
+		return 0;
+	if (!isdigit((unsigned char)g[2]) || !isdigit((unsigned char)g[3]))
+		return 0;
+	if (L == 6 && (!isalpha((unsigned char)g[4]) || !isalpha((unsigned char)g[5])))
+		return 0;
+	return 1;
+}
+
 // extract the calling station from "CQ [DX/POTA/...] CALL [GRID]": first token with a digit
 static int hunt_cq_caller(const char *text, char *out){
 	char t[64], *tok, *sp;
@@ -423,6 +476,11 @@ static int hunt_cq_caller(const char *text, char *out){
 	while ((tok = strtok_r(NULL, " ", &sp))){
 		int L = strlen(tok);
 		if (strpbrk(tok, "0123456789") && L >= 3 && L <= 12){
+			if (!plausible_call(tok))
+				return 0; // not a real callsign: free text, do not answer
+			char *nxt = strtok_r(NULL, " ", &sp);
+			if (nxt && !plausible_grid(nxt))
+				return 0; // trailing token is not a grid: nonstandard CQ
 			strcpy(out, tok);
 			return 1;
 		}
@@ -548,6 +606,8 @@ static int hunt_queue_best(){
 			continue;
 		if (ign_blocked(hunt_tab[i].call))
 			continue;
+		if (!plausible_call(hunt_tab[i].call))
+			continue;
 		int trend = hunt_tab[i].last_snr - hunt_tab[i].prev_snr;
 		int score = hunt_tab[i].last_snr + (trend > 0 ? 3 : trend < -3 ? -5 : 0);
 		if (score > best_score){ best_score = score; best = i; }
@@ -563,6 +623,22 @@ int hunt_queue_depth(){
 			&& now >= hunt_tab[i].next_ok && now - hunt_tab[i].last_heard <= 90)
 			n++;
 	return n;
+}
+
+void hunt_skip_current(){
+	char note[90];
+	if (!hunt_target[0]){
+		write_console(FONT_LOG, "no active hunt target\n");
+		return;
+	}
+	int i = hunt_tab_find(hunt_target);
+	if (i >= 0)
+		hunt_tab[i].tries = 50; // not again this session
+	sprintf(note, "HUNT: skipping %s for this session\n", hunt_target);
+	write_console(FONT_LOG, note);
+	hunt_target[0] = 0;
+	ft8_abort();
+	call_wipe();
 }
 
 void hunt_queue_report(){
