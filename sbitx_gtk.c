@@ -4287,9 +4287,9 @@ gboolean ui_tick(gpointer gook){
 	static int st_pushed = 0;
 	if (!st_pushed && ticks >= 50){ //one-shot: push the saved sidetone level to the DSP (its default is full volume)
 		st_pushed = 1;
-		char sb[30], sr[20];
-		sprintf(sb, "sidetone=%d", field_int("SIDETONE"));
-		sdr_request(sb, sr);
+		char sr[20];
+		field_set("SIDETONE", "30"); //TX monitor volume always starts at 30
+		sdr_request("sidetone=30", sr);
 	}
 	static int session_marked = 0;
 	if (!session_marked && ticks >= 60){ //one-shot: session marker for the log browser

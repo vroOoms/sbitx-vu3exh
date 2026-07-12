@@ -113,8 +113,10 @@ to answer.
 
 ## 5. Commands
 
-Type in the device `KBD` line or pick from the web `CMD` dropdown
-(each shows a description):
+Pick from the web `CMD` dropdown (each command shows a description), or type
+on the device keyboard **with a leading backslash**: `\ftbest`, `\skip`,
+`\queue`... (without the backslash, typed text is treated as message text;
+the web CMD panel needs no backslash):
 
 | Command | What it does |
 |---|---|
@@ -177,7 +179,8 @@ Kill switch: `echo 0 > data/bmask.txt`.
 
 ## 9. Good to know
 
-- **SIDETONE** field = speaker volume during FT8/CW TX. 0 is silent.
+- **SIDETONE** field = speaker volume during FT8/CW TX. Always starts at 30
+  after a restart (hardcoded); adjust live any time, 0 is silent.
 - Waking a blanked screen: touch it — that touch also *clicks*, so touch an
   empty corner.
 - Restart etiquette: give the radio ~30 s after a cold Pi boot before
