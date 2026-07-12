@@ -1,2 +1,15 @@
 data/hw_settings.ini
 data/user_settings.ini
+*.bak
+*bak
+*.qbak
+*.swp
+data/*.csv
+data/*.dat
+data/display_log.txt
+data/antenna.txt
+data/hunt_*.txt
+data/robo_bands.txt
+backup.tgz
+web/backup.tgz
+web/data

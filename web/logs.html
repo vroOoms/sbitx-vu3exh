@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sBITX Logs</title>
+<style>
+body { background:#000; color:#0ff; font-family:Helvetica,sans-serif; margin:0; padding:10px; }
+h2 { color:#fff; margin:5px 0; }
+.tabbar button, .toolbar button, .toolbar a {
+  background:#0c2333; color:#fff; border:1px solid #333; padding:8px 14px;
+  margin:2px; cursor:pointer; font-size:14px; text-decoration:none; display:inline-block;
+}
+.tabbar button.active { background:#049117; }
+.toolbar input, .toolbar select {
+  background:#000; color:#fff; border:1px solid #555; padding:7px; font-size:14px; margin:2px;
+}
+table { border-collapse:collapse; width:100%; font-family:courier,monospace; font-size:12px; margin-top:8px; }
+th { color:#fff; text-align:left; border-bottom:1px solid #555; padding:3px 6px; position:sticky; top:0; background:#000; }
+td { padding:2px 6px; border-bottom:1px solid #1a1a1a; white-space:nowrap; }
+tr.tx td { color:orange; }
+tr.qso td { color:#7CFC00; }
+#tablewrap { max-height:70vh; overflow:auto; border:1px solid #333; }
+.sess { border:1px solid #333; margin:8px 0; padding:8px; }
+.sess h3 { color:#fff; margin:2px 0; }
+.count { color:#888; font-size:12px; margin-left:10px; }
+#status { color:yellow; }
+</style>
+</head>
+<body>
+<h2>sBITX Logs <span class="count" id="counts"></span></h2>
+<div class="tabbar">
+  <button id="tab-qso" class="active" onclick="show('qso')">QSOs</button>
+  <button id="tab-dec" onclick="show('dec')">Decodes</button>
+  <button id="tab-missed" onclick="show('missed')">Missed CQs</button>
+  <button id="tab-stats" onclick="show('stats')">Stats</button>
+  <button id="tab-sess" onclick="show('sess')">Sessions</button>
+</div>
+<div class="toolbar">
+  <input id="search" placeholder="search call / grid / country / text" oninput="render()">
+  <select id="bandsel" onchange="render()">
+    <option value="">all bands</option>
+    <option>80m</option><option>40m</option><option>30m</option><option>20m</option>
+    <option>17m</option><option>15m</option><option>12m</option><option>10m</option>
+  </select>
+  <select id="dirsel" onchange="render()">
+    <option value="">rx+tx</option><option value="RX">RX only</option>
+    <option value="TX">TX only</option><option value="TXEND">TX power</option>
+  </select>
+  <a href="/data/qso_log.csv" download>QSO csv</a>
+  <a href="/data/ft8_decodes.csv" download>Decodes csv</a>
+  <button onclick="backup()">Backup all logs (zip)</button>
+  <span id="status"></span>
+</div>
+<div id="tablewrap"><table id="tbl"></table></div>
+<div id="sessions" style="display:none"></div>
+<script>
+var qso = [], dec = [], sess = [], tab = 'qso';
+
+function csv(line){ // simple csv with quoted last fields
+  var out = [], cur = '', q = false;
+  for (var i = 0; i < line.length; i++){
+    var c = line[i];
+    if (q){ if (c == '"') q = false; else cur += c; }
+    else if (c == '"') q = true;
+    else if (c == ','){ out.push(cur); cur = ''; }
+    else cur += c;
+  }
+  out.push(cur);
+  return out;
+}
+
+function load(url, cb){
+  fetch(url + '?t=' + Date.now()).then(function(r){ return r.ok ? r.text() : ''; })
+    .then(function(t){ cb(t ? t.trim().split('\n').map(csv) : []); refresh(); })
+    .catch(function(){ cb([]); refresh(); });
+}
+
+function refresh(){
+  document.getElementById('counts').textContent =
+    qso.length + ' QSOs, ' + dec.length + ' decodes, ' + sess.length + ' session events';
+  render();
+}
+
+function show(t){
+  tab = t;
+  ['qso','dec','sess','missed','stats'].forEach(function(x){
+    document.getElementById('tab-' + x).className = (x == t) ? 'active' : '';
+  });
+  document.getElementById('tablewrap').style.display = (t == 'sess' || t == 'stats') ? 'none' : 'block';
+  document.getElementById('sessions').style.display = (t == 'sess' || t == 'stats') ? 'block' : 'none';
+  render();
+}
+
+function decode_msg(r){ return r.length >= 11 ? r[10] : (r.length >= 9 ? r[8] : ''); }
+function cq_caller(msg){
+  if (msg.indexOf('CQ ') != 0) return null;
+  var t = msg.split(/\s+/);
+  for (var i = 1; i < t.length && i < 4; i++)
+    if (/\d/.test(t[i]) && t[i].length >= 3 && t[i].indexOf('<') < 0) return t[i];
+  return null;
+}
+function ago(ts){ // ts = "YYYY-MM-DD HH:MM:SS" UTC
+  var d = new Date(ts.replace(' ', 'T') + 'Z');
+  var s = Math.floor((Date.now() - d.getTime()) / 1000);
+  if (s < 90) return s + 's ago';
+  if (s < 5400) return Math.round(s / 60) + 'min ago';
+  return (s / 3600).toFixed(1) + 'h ago';
+}
+
+function renderMissed(){
+  var worked = {};
+  qso.forEach(function(r){ if (r.length > 4) worked[r[4]] = 1; });
+  var seen = {};
+  dec.forEach(function(r){
+    if (r[2] != 'RX') return;
+    var call = cq_caller(decode_msg(r));
+    if (!call || worked[call]) return;
+    if (!seen[call]) seen[call] = {call: call, count: 0};
+    var s = seen[call];
+    s.count++; s.ts = r[0] + ' ' + r[1]; s.band = r[3]; s.snr = r[6];
+  });
+  var rows = Object.keys(seen).map(function(k){ return seen[k]; })
+    .sort(function(a, b){ return a.ts < b.ts ? 1 : -1; });
+  var tbl = document.getElementById('tbl');
+  var h = '<tr><th>call</th><th>last heard (UTC)</th><th>how long ago</th><th>band</th><th>snr</th><th>CQs heard</th></tr>';
+  var f = document.getElementById('search').value.toUpperCase();
+  var band = document.getElementById('bandsel').value;
+  rows = rows.filter(function(r){
+    if (band && r.band != band) return false;
+    if (f && r.call.toUpperCase().indexOf(f) < 0) return false;
+    return true;
+  });
+  h += rows.slice(0, 500).map(function(r){
+    return '<tr class="qso"><td>' + r.call + '</td><td>' + r.ts + '</td><td>' + ago(r.ts)
+      + '</td><td>' + r.band + '</td><td>' + r.snr + '</td><td>' + r.count + '</td></tr>';
+  }).join('');
+  tbl.innerHTML = h;
+  document.getElementById('counts').textContent = rows.length + ' stations called CQ and were not worked';
+}
+
+function renderStats(){
+  var box = document.getElementById('sessions');
+  // session window = since the last START marker (or everything)
+  var t0 = null, tEnd = null;
+  sess.forEach(function(r){ if (r[0] == 'START') t0 = r[1]; });
+  var win = function(r){ return !t0 || (r[0] + ' ' + r[1]) >= t0; };
+  var d = dec.filter(win), q = qso.filter(function(r){ return !t0 || (r[0] + ' ' + r[1]) >= t0; });
+  if (!d.length){ box.innerHTML = 'No decode data in this session yet'; return; }
+  var first = d[0][0] + ' ' + d[0][1], last = d[d.length-1][0] + ' ' + d[d.length-1][1];
+  var durS = (new Date(last.replace(' ','T')+'Z') - new Date(first.replace(' ','T')+'Z')) / 1000;
+  if (durS < 60) durS = 60;
+  // heard CQ stations
+  var cqs = {}, workable = {};
+  d.forEach(function(r){
+    if (r[2] != 'RX') return;
+    var c = cq_caller(decode_msg(r));
+    if (!c) return;
+    cqs[c] = 1;
+    if (parseInt(r[6]) >= -20) workable[c] = 1;
+  });
+  var nHeard = Object.keys(cqs).length, nWorkable = Object.keys(workable).length;
+  // attempted = unique first-tokens of our TX lines
+  var att = {};
+  d.forEach(function(r){
+    if (r[2] != 'TX') return;
+    var t = decode_msg(r).split(/\s+/)[0];
+    if (t && t != 'CQ') att[t] = 1;
+  });
+  var nAtt = Object.keys(att).length, nWorked = q.length;
+  // our QSO durations: first TX to a call -> qso logged time
+  var firstTx = {};
+  d.forEach(function(r){
+    if (r[2] != 'TX') return;
+    var t = decode_msg(r).split(/\s+/)[0];
+    if (t && t != 'CQ' && !firstTx[t]) firstTx[t] = r[0] + ' ' + r[1];
+  });
+  var qsoTimes = [];
+  q.forEach(function(r){
+    var c = r[4];
+    if (firstTx[c]){
+      var dt = (new Date((r[0]+' '+r[1]).replace(' ','T')+'Z') - new Date(firstTx[c].replace(' ','T')+'Z')) / 1000;
+      if (dt > 0 && dt < 1800) qsoTimes.push(dt);
+    }
+  });
+  var avgQ = qsoTimes.length ? qsoTimes.reduce(function(a,b){return a+b;},0) / qsoTimes.length : 0;
+  // TX airtime
+  var nTx = d.filter(function(r){ return r[2] == 'TX'; }).length;
+  var txS = nTx * 13.5;
+  var IDEAL = 90; // a clean FT8 QSO: ~6 slots incl. the other side
+  var capacity = Math.min(nWorkable, Math.floor(durS / IDEAL));
+  function line(k, v){ return '<div><span style="color:#888">' + k + ':</span> <b>' + v + '</b></div>'; }
+  box.innerHTML = '<div class="sess"><h3>Session efficiency (since ' + (t0 || 'start of logs') + ' UTC)</h3>'
+    + line('Session length', (durS/60).toFixed(0) + ' min')
+    + line('Stations heard calling CQ', nHeard + ' (' + nWorkable + ' workable at snr &ge; -20)')
+    + line('Stations you attempted', nAtt)
+    + line('QSOs completed', nWorked + (nAtt ? ' (' + Math.round(100*nWorked/Math.max(nAtt,1)) + '% of attempts)' : ''))
+    + line('Realistic capacity this session', capacity + ' QSOs (band could sustain, at ~' + IDEAL + 's per clean QSO)')
+    + line('Efficiency vs capacity', capacity ? Math.round(100*nWorked/capacity) + '%' : '-')
+    + line('Your average QSO time', avgQ ? avgQ.toFixed(0) + ' s (' + (avgQ/15).toFixed(1) + ' slots) vs ~' + IDEAL + ' s typical' : 'no completed QSOs yet')
+    + line('Your TX airtime', (txS/60).toFixed(1) + ' min = ' + Math.round(100*txS/durS) + '% of session (' + nTx + ' transmissions)')
+    + '<div style="color:#666;margin-top:6px">Capacity assumes one QSO at a time on this rig, average propagation and both sides replying promptly; misses from QSB/pileups are counted as workable if they hit snr &ge; -20 even once.</div></div>';
+  document.getElementById('counts').textContent = '';
+}
+
+function render(){
+  var f = document.getElementById('search').value.toUpperCase();
+  var band = document.getElementById('bandsel').value;
+  var dir = document.getElementById('dirsel').value;
+  if (tab == 'sess') return renderSessions();
+  if (tab == 'stats') return renderStats();
+  if (tab == 'missed') return renderMissed();
+  var tbl = document.getElementById('tbl');
+  var head, rows;
+  if (tab == 'qso'){
+    head = ['date','utc','band','dial','call','grid','sent','recv','country','W','SWR'];
+    rows = qso.filter(function(r){ return r.length >= 11; }).map(function(r){
+      return {cls:'qso', c:[r[0],r[1],r[2],(r[3]/1000).toFixed(1),r[4],r[5],r[6],r[7],r[8],(r[9]/10).toFixed(1),(r[10]/10).toFixed(1)]};
+    });
+  } else {
+    head = ['date','utc','dir','band','dial kHz','snr','df','W','SWR','message'];
+    rows = dec.map(function(r){
+      if (r.length >= 11) return {cls:(r[2]!='RX'?'tx':''), c:[r[0],r[1],r[2],r[3],(r[4]/1000).toFixed(1),r[6],r[7],r[8]>0?(r[8]/10).toFixed(1):'',r[9]>0?(r[9]/10).toFixed(1):'',r[10]]};
+      if (r.length >= 9)  return {cls:(r[2]!='RX'?'tx':''), c:[r[0],r[1],r[2],r[3],(r[4]/1000).toFixed(1),r[6],r[7],'','',r[8]]};
+      return null;
+    }).filter(Boolean);
+  }
+  rows = rows.filter(function(r){
+    if (band && r.c.indexOf(band) < 0) return false;
+    if (dir && tab == 'dec' && r.c[2] != dir) return false;
+    if (f && r.c.join(' ').toUpperCase().indexOf(f) < 0) return false;
+    return true;
+  });
+  var h = '<tr>' + head.map(function(x){ return '<th>' + x + '</th>'; }).join('') + '</tr>';
+  h += rows.slice(-2000).reverse().map(function(r){
+    return '<tr class="' + r.cls + '">' + r.c.map(function(x){ return '<td>' + String(x).replace(/</g,'&lt;') + '</td>'; }).join('') + '</tr>';
+  }).join('');
+  tbl.innerHTML = h;
+}
+
+function renderSessions(){
+  var box = document.getElementById('sessions');
+  var starts = [];
+  sess.forEach(function(r){ if (r[0] == 'START') starts.push({ts:r[1], info:r[2], meta:[]});
+    else if (r[0] == 'META' && starts.length) starts[starts.length-1].meta.push(r[1] + ' ' + r[2]); });
+  var h = '';
+  for (var i = starts.length - 1; i >= 0; i--){
+    var s = starts[i];
+    var end = (i + 1 < starts.length) ? starts[i + 1].ts : '9999';
+    var q = qso.filter(function(r){ return (r[0] + ' ' + r[1]) >= s.ts && (r[0] + ' ' + r[1]) < end; });
+    var d = dec.filter(function(r){ return (r[0] + ' ' + r[1]) >= s.ts && (r[0] + ' ' + r[1]) < end; });
+    var bands = {}, countries = {};
+    q.forEach(function(r){ bands[r[2]] = 1; countries[r[8]] = 1; });
+    d.forEach(function(r){ bands[r[3]] = 1; });
+    h += '<div class="sess"><h3>Session ' + s.ts + ' UTC — ' + (s.info || '') + '</h3>'
+      + '<div>' + q.length + ' QSOs, ' + d.length + ' decode lines, bands: '
+      + Object.keys(bands).join(' ') + (q.length ? ', countries: ' + Object.keys(countries).join(', ') : '') + '</div>'
+      + (s.meta.length ? '<div style="color:#888">' + s.meta.map(function(m){ return m.replace(/</g,'&lt;'); }).join('<br>') + '</div>' : '')
+      + '</div>';
+  }
+  box.innerHTML = h || 'No sessions recorded yet';
+}
+
+function backup(){
+  document.getElementById('status').textContent = ' building backup...';
+  fetch('/rest?do=backup').then(function(r){ return r.text(); }).then(function(){
+    setTimeout(function(){
+      document.getElementById('status').innerHTML = ' <a href="/backup.tgz" download style="color:yellow">download backup.tgz</a>';
+    }, 10000);
+  });
+}
+
+load('/data/qso_log.csv', function(r){ qso = r; });
+load('/data/ft8_decodes.csv', function(r){ dec = r; });
+load('/data/sessions.csv', function(r){ sess = r; });
+setInterval(function(){
+  load('/data/qso_log.csv', function(r){ qso = r; });
+  load('/data/ft8_decodes.csv', function(r){ dec = r; });
+  load('/data/sessions.csv', function(r){ sess = r; });
+}, 30000);
+</script>
+</body>
+</html>

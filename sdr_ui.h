@@ -35,6 +35,9 @@ extern int display_freq;
 #define FONT_TELNET 13
 #define FONT_FT8_QUEUED 14
 #define FONT_FT8_REPLY 15
+#define FONT_FT8_CQ 16
+#define FONT_FT8_73 17
+#define FONT_FT8_REPORT 18
 
 void enter_qso();
 void call_wipe();

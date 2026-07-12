@@ -198,7 +198,14 @@ static void fn(struct mg_connection *c, int ev, void *ev_data, void *fn_data) {
       // Websocket connection, which will receive MG_EV_WS_MSG events.
       mg_ws_upgrade(c, hm, NULL);
     } else if (mg_http_match_uri(hm, "/rest")) {
-      // Serve REST response
+      int is_backup = 0;
+      for (size_t qi = 0; hm->query.len >= 6 && qi + 6 <= hm->query.len; qi++)
+        if (!strncmp(hm->query.ptr + qi, "backup", 6)) { is_backup = 1; break; }
+      if (is_backup){
+        system("cd /home/pi/sbitx && tar czf web/backup.tgz data/*.csv data/*.txt data/*.ini 2>/dev/null &");
+        mg_http_reply(c, 200, "", "{\"result\": \"backup started - fetch /backup.tgz in ~10s\"}\n");
+      }
+      else
       mg_http_reply(c, 200, "", "{\"result\": %d}\n", 123);
     } else {
       // Serve static files

@@ -166,6 +166,9 @@ struct font_style font_table[] = {
 	{FONT_TELNET, 0, 1, 0, "Mono", 11, CAIRO_FONT_WEIGHT_NORMAL, CAIRO_FONT_SLANT_NORMAL},
 	{FONT_FT8_QUEUED, 0.5, 0.5, 0.5, "Mono", 11, CAIRO_FONT_WEIGHT_NORMAL, CAIRO_FONT_SLANT_NORMAL},
 	{FONT_FT8_REPLY, 1, 0.6, 0, "Mono", 11, CAIRO_FONT_WEIGHT_NORMAL, CAIRO_FONT_SLANT_NORMAL},
+	{FONT_FT8_CQ, 1, 1, 0, "Mono", 11, CAIRO_FONT_WEIGHT_NORMAL, CAIRO_FONT_SLANT_NORMAL},
+	{FONT_FT8_73, 1, 0.5, 1, "Mono", 11, CAIRO_FONT_WEIGHT_NORMAL, CAIRO_FONT_SLANT_NORMAL},
+	{FONT_FT8_REPORT, 0.4, 0.8, 1, "Mono", 11, CAIRO_FONT_WEIGHT_NORMAL, CAIRO_FONT_SLANT_NORMAL},
 };
 
 struct encoder enc_a, enc_b;
@@ -194,6 +197,8 @@ struct console_line {
 };
 static int console_style = FONT_LOG;
 static struct console_line console_stream[MAX_CONSOLE_LINES];
+static int console_scroll_back = 0; //lines back from the live tail (0 = following)
+static int cons_drag_y = 0, cons_drag_scroll = 0, cons_dragging = 0, cons_pressed = 0;
 int console_current_line = 0;
 int	console_selected_line = -1;
 struct Queue q_web;
@@ -358,6 +363,14 @@ struct cmd {
 
 static unsigned long focus_since = 0;
 static struct field *f_focus = NULL;
+/* --- band scanner scaffold (default off; tune tomorrow) --- */
+static int scan_active = 0;
+static int scan_lo = 7000000, scan_hi = 7200000, scan_step = 2000, scan_cur = 7000000, scan_thresh = -30;
+static int scan_last_set = 0;
+static int scan_settle = 0;
+#define SCAN_MAX_HITS 48
+static int scan_hit_f[SCAN_MAX_HITS], scan_hit_db[SCAN_MAX_HITS], scan_hit_w[SCAN_MAX_HITS], scan_nhits = 0;
+static int scan_return_freq = 0;
 static struct field *f_hover = NULL;
 static struct field *f_last_text = NULL;
 
@@ -442,6 +455,7 @@ int do_text(struct field *f, cairo_t *gfx, int event, int a, int b, int c);
 int do_status(struct field *f, cairo_t *gfx, int event, int a, int b, int c);
 int do_console(struct field *f, cairo_t *gfx, int event, int a, int b, int c);
 int do_pitch(struct field *f, cairo_t *gfx, int event, int a, int b, int c);
+int do_sidetone(struct field *f, cairo_t *gfx, int event, int a, int b, int c);
 int do_kbd(struct field *f, cairo_t *gfx, int event, int a, int b, int c);
 int do_toggle_kbd(struct field *f, cairo_t *gfx, int event, int a, int b, int c);
 int do_mouse_move(struct field *f, cairo_t *gfx, int event, int a, int b, int c);
@@ -486,6 +500,13 @@ struct field main_controls[] = {
 	{ "#web", NULL, 420,5,  40, 40, "WEB", 40, "", FIELD_BUTTON, FONT_FIELD_VALUE, 
 		"", 0,0, 0,COMMON_CONTROL},
 	{"#set", NULL, 460, 5, 40, 40, "SET", 1, "", FIELD_BUTTON, FONT_FIELD_VALUE,"", 0,0,0,COMMON_CONTROL}, 
+	{ "rx_nr", NULL, 460, 50, 40, 40, "DNR", 40, "0", FIELD_NUMBER, FONT_FIELD_VALUE, "", 0, 100, 5, COMMON_CONTROL},
+	{ "rx_anf", NULL, 1000, -1000, 60, 45, "ANF", 40, "OFF", FIELD_TOGGLE, FONT_FIELD_VALUE, "ON/OFF", 0,0,0, COMMON_CONTROL},
+	{ "#scan", NULL, 1000, -1000, 60, 45, "SCAN", 40, "OFF", FIELD_TOGGLE, FONT_FIELD_VALUE, "ON/OFF", 0,0,0, COMMON_CONTROL},
+	{ "#wide", NULL, 1000, -1000, 60, 45, "WIDE", 40, "OFF", FIELD_TOGGLE, FONT_FIELD_VALUE, "ON/OFF", 0,0,0, COMMON_CONTROL},
+	{ "#opt", NULL, 1000, -1000, 60, 45, "OPT", 40, "", FIELD_BUTTON, FONT_FIELD_VALUE, "", 0,0,0, COMMON_CONTROL},
+	{ "#smart", NULL, 1000, -1000, 55, 45, "SMART", 40, "OFF", FIELD_TOGGLE, FONT_FIELD_VALUE, "ON/OFF", 0,0,0, COMMON_CONTROL},
+	{ "rx_rnnoise", NULL, 1000, -1000, 60, 45, "AINR", 40, "OFF", FIELD_TOGGLE, FONT_FIELD_VALUE, "ON/OFF", 0,0,0, COMMON_CONTROL},
 	{ "r1:gain", NULL, 375, 5, 40, 40, "IF", 40, "60", FIELD_NUMBER, FONT_FIELD_VALUE, 
 		"", 0, 100, 1,COMMON_CONTROL},
 	{ "r1:agc", NULL, 415, 5, 40, 40, "AGC", 40, "SLOW", FIELD_SELECTION, FONT_FIELD_VALUE, 
@@ -614,7 +635,7 @@ struct field main_controls[] = {
     "", 50, 1000, 50, CW_CONTROL},
 	{ "#tx_pitch", NULL, 400, -1000, 50, 50, "TX_PITCH", 40, "600", FIELD_NUMBER, FONT_FIELD_VALUE, 
     "", 300, 3000, 10, FT8_CONTROL},
-	{ "sidetone", NULL, 1000, -1000, 50, 50, "SIDETONE", 40, "25", FIELD_NUMBER, FONT_FIELD_VALUE, 
+	{ "sidetone", do_sidetone, 1000, -1000, 50, 50, "SIDETONE", 40, "25", FIELD_NUMBER, FONT_FIELD_VALUE, 
     "", 0, 100, 5, CW_CONTROL},
 	{"#sent_exchange", NULL, 1000, -1000, 400, 149, "SENT_EXCHANGE", 70, "", FIELD_TEXT, FONT_SMALL, 
 		"", 0,10,1, COMMON_CONTROL},
@@ -640,8 +661,8 @@ struct field main_controls[] = {
     "", 300, 3000, 50, 0},
 
 	//FT8 controls
-	{"#ft8_auto", NULL, 1000, -1000, 50, 50, "FT8_AUTO", 40, "ON", FIELD_TOGGLE, FONT_FIELD_VALUE, 
-		"ON/OFF", 0,0,0, FT8_CONTROL},
+	{"#ft8_auto", NULL, 1000, -1000, 50, 50, "FT8_AUTO", 40, "ON", FIELD_SELECTION, FONT_FIELD_VALUE, 
+		"ROBO/HUNT/ON/OFF", 0,0,0, FT8_CONTROL},
 	{"#ft8_tx1st", NULL, 1000, -1000, 50, 50, "FT8_TX1ST", 40, "ON", FIELD_TOGGLE, FONT_FIELD_VALUE, 
 		"ON/OFF", 0,0,0, FT8_CONTROL},
   { "#ft8_repeat", NULL, 1000, -1000, 50, 50, "FT8_REPEAT", 40, "5", FIELD_NUMBER, FONT_FIELD_VALUE,
@@ -943,6 +964,9 @@ void  web_write(int style, char *data){
 
 	switch(style){
 		case FONT_FT8_REPLY:
+		case FONT_FT8_CQ:
+		case FONT_FT8_73:
+		case FONT_FT8_REPORT:
 		case FONT_FT8_RX:
 			strcpy(tag, "WSJTX-RX");
 			break;
@@ -1023,6 +1047,8 @@ void  web_write(int style, char *data){
 
 int console_init_next_line(){
 	console_current_line++;
+	if (console_scroll_back > 0 && console_scroll_back < MAX_CONSOLE_LINES - 8)
+		console_scroll_back++; //hold the view steady while scrolled back
 	if (console_current_line == MAX_CONSOLE_LINES)
 		console_current_line = 0;
 	console_stream[console_current_line].text[0] = 0;	
@@ -1111,8 +1137,8 @@ void draw_console(cairo_t *gfx, struct field *f){
 	int y = f->y; 
 	int j = 0;
 
-	int start_line = console_current_line - n_lines;
-	if (start_line < 0)
+	int start_line = console_current_line - n_lines - console_scroll_back;
+	while (start_line < 0)
 		start_line += MAX_CONSOLE_LINES;
 
  	for (int i = 0; i <= n_lines; i++){
@@ -1140,8 +1166,23 @@ int do_console(struct field *f, cairo_t *gfx, int event, int a, int b, int c){
 			draw_console(gfx, f);
 			return 1;
 		break;
-		case GDK_BUTTON_PRESS:
 		case GDK_MOTION_NOTIFY:
+			if (cons_pressed && (cons_dragging || abs(b - cons_drag_y) > line_height)){
+				int nsb = cons_drag_scroll + (b - cons_drag_y)/line_height;
+				cons_dragging = 1;
+				if (nsb < 0) nsb = 0;
+				if (nsb > MAX_CONSOLE_LINES - n_lines - 2) nsb = MAX_CONSOLE_LINES - n_lines - 2;
+				console_scroll_back = nsb;
+				f->is_dirty = 1;
+			}
+			return 1;
+		break;
+		case GDK_BUTTON_PRESS:
+			cons_pressed = 1;
+			cons_drag_y = b;
+			cons_drag_scroll = console_scroll_back;
+			cons_dragging = 0;
+			start_line -= console_scroll_back; //select what is actually on screen
 			l = start_line + ((b - f->y)/line_height);
 			if (l < 0)
 				l += MAX_CONSOLE_LINES;
@@ -1150,6 +1191,34 @@ int do_console(struct field *f, cairo_t *gfx, int event, int a, int b, int c){
 			return 1;
 		break;
 		case GDK_BUTTON_RELEASE:
+			{
+				cons_pressed = 0;
+				if (cons_dragging){	//this was a scroll gesture, not a tap
+					cons_dragging = 0;
+					return 1;
+				}
+				// SCANJUMP: tap a scan-report line ("7154.3 SSB (-2)") to tune to it
+				int skhz = 0, sfrac = 0;
+				if (sscanf(console_stream[console_selected_line].text, "%d.%d", &skhz, &sfrac) == 2
+					&& skhz >= 1800 && skhz <= 30000){
+					char srr[100], fbb[20];
+					int sfq = skhz*1000 + sfrac*100;
+					set_operating_freq(sfq, srr);
+					sprintf(fbb, "%d", sfq);
+					field_set("FREQ", fbb);
+					if (!strcmp(get_field("#smart")->value, "ON")){
+						char mword[8] = "";
+						sscanf(console_stream[console_selected_line].text, "%*d.%*d %7s", mword);
+						if (!strcmp(mword, "CW")) field_set("MODE", "CW");
+						else if (!strcmp(mword, "SSB")) field_set("MODE", sfq < 10000000 ? "LSB" : "USB");
+						else if (!strcmp(mword, "DIG")) field_set("MODE", "FT8");
+					}
+					{ char jb[80]; sprintf(jb, ">> JUMP %d.%d %s\n", skhz, sfrac, field_str("MODE"));
+					  write_console(FONT_LOG, jb); }
+					f->is_dirty = 1;
+					return 1;
+				}
+			}
 			if (!strcmp(get_field("r1:mode")->value, "FT8")){
 				char ft8_message[100], ft8_response[100];
 				strcpy(ft8_message, console_stream[console_selected_line].text);
@@ -1360,6 +1429,7 @@ void enter_qso(){
 		get_field("#exchange_sent")->value, 
 		get_field("#rst_received")->value, 
 		get_field("#exchange_received")->value);
+	{ extern void ft8_qso_csv(); ft8_qso_csv(); }
 	char buff[100];
 	sprintf(buff, "Logged: %s %s-%s %s-%s\n", 
 		field_str("CALL"), field_str("SENT"), field_str("NR"), 
@@ -1510,7 +1580,25 @@ void draw_modulation(struct field *f, cairo_t *gfx){
 	cairo_stroke(gfx);
 }
 
-static int waterfall_offset = 30;
+static int waterfall_offset = 45;
+// AUTOREF: adaptive waterfall reference - keeps band noise floor just above black
+// on any band at any IF gain (user request 2026-07-03)
+static int wf_auto = 1;
+static void wf_auto_ref(){
+	if (!wf_auto) return;
+	extern int spectrum_plot[];
+	long s = 0; int n = 0, i;
+	for (i = 1300; i < 1750; i++){ s += spectrum_plot[i]; n++; }
+	int mean = (int)(s / n);
+	long s2 = 0; int n2 = 0;
+	for (i = 1300; i < 1750; i++) if (spectrum_plot[i] <= mean){ s2 += spectrum_plot[i]; n2++; }
+	int floorv = n2 ? (int)(s2/n2) : mean;
+	int target = 8 - floorv;
+	if (target < 20) target = 20;
+	if (target > 75) target = 75;
+	if (waterfall_offset < target) waterfall_offset++;
+	else if (waterfall_offset > target) waterfall_offset--;
+}
 static int  *wf = NULL;
 GdkPixbuf *waterfall_pixbuf = NULL;
 guint8 *waterfall_map = NULL;
@@ -1707,6 +1795,17 @@ void draw_spectrum(struct field *f_spectrum, cairo_t *gfx){
 
 	draw_spectrum_grid(f_spectrum, gfx);
 	f = f_spectrum;
+	/* ---- S-meter overlay: RX level dBFS + provisional S-units (calibrate on real signal) ---- */
+	{
+		double _sig = (rx_list ? rx_list->signal_avg : 0.0);
+		double _db = 20.0*log10(_sig + 1.0);
+		int _s = (int)((_db - 30.0)/6.0);
+		if (_s < 0) _s = 0;
+		char _sm[80];
+		if (_s <= 9) sprintf(_sm, "S%d  ~%.0fdB", _s, _db);
+		else sprintf(_sm, "S9+%d  ~%.0fdB", (_s-9)*6, _db);
+		draw_text(gfx, f_spectrum->x + 4, f_spectrum->y + 1, _sm, FONT_FIELD_LABEL);
+	}
 
 	//draw the frequency readout at the bottom
 	cairo_set_source_rgb(gfx, palette[COLOR_TEXT_MUTED][0], 
@@ -2038,7 +2137,7 @@ static void layout_ui(){
 		case MODE_CWR:
 			field_move("CONSOLE", 5, y1, 350, y2-y1-110);
 			field_move("SPECTRUM", 360, y1, x2-365, 70);
-			field_move("WATERFALL", 360, y1+60, x2-365, y2-y1-110);
+			field_move("WATERFALL", 360, y1+70, x2-365, y2-y1-120);
 			// first line below the decoder/waterfall
 			field_move("ESC", 5, y2-47, 40, 45);
 			field_move("F1", 50, y2-47, 40, 45);
@@ -2061,15 +2160,28 @@ static void layout_ui(){
 		case MODE_LSB:
 		case MODE_AM:
 		case MODE_NBFM:
-			field_move("CONSOLE", 5, y1, 350, y2-y1-55);
-			field_move("SPECTRUM", 360, y1, x2-365, 70);
-			field_move("WATERFALL", 360, y1+70, x2-365, y2-y1-125);
+			// WIDEVIEW: full-width spectrum+waterfall when console not needed
+			if (!strcmp(field_str("WIDE"), "ON")){
+				field_move("CONSOLE", 5, -2000, 350, 100);
+				field_move("SPECTRUM", 5, y1, x2-10, 70);
+				field_move("WATERFALL", 5, y1+70, x2-10, y2-y1-125);
+			} else {
+				field_move("CONSOLE", 5, y1, 350, y2-y1-55);
+				field_move("SPECTRUM", 360, y1, x2-365, 70);
+				field_move("WATERFALL", 360, y1+70, x2-365, y2-y1-125);
+			}
 			y1 = y2 -50;
 			field_move("MIC", 5, y1, 45, 45);
-			field_move("LOW", 60, y1, 95, 45);
-			field_move("HIGH", 160, y1, 95, 45);
-			field_move("TX", 260, y1, 95, 45);
-			field_move("RX", 360, y1, 95, 45);
+			field_move("LOW", 55, y1, 75, 45);
+			field_move("HIGH", 135, y1, 75, 45);
+			field_move("TX", 215, y1, 60, 45);
+			field_move("RX", 280, y1, 60, 45);
+			field_move("ANF", 345, y1, 55, 45);
+			field_move("SCAN", 403, y1, 55, 45);
+			field_move("AINR", 461, y1, 55, 45);
+			field_move("WIDE", 519, y1, 55, 45);
+			field_move("OPT", 577, y1, 55, 45);
+			field_move("SMART", 635, y1, 55, 45);
 		break;
 		default:
 			field_move("CONSOLE", 5, y1, 350, y2-y1-110);
@@ -2646,6 +2758,23 @@ int do_pitch(struct field *f, cairo_t *gfx, int event, int a, int b, int c){
 		return 1;
 	}
 		
+	return 0;
+}
+
+int do_sidetone(struct field *f, cairo_t *gfx, int event, int a, int b, int c){
+	int v = atoi(f->value);
+	if (event == FIELD_EDIT){
+		if (a == MIN_KEY_UP && v + f->step <= f->max)
+			v += f->step;
+		else if (a == MIN_KEY_DOWN && v - f->step >= f->min)
+			v -= f->step;
+		sprintf(f->value, "%d", v);
+		update_field(f);
+		char buff[30], response[20];
+		sprintf(buff, "sidetone=%d", v);
+		sdr_request(buff, response);
+		return 1;
+	}
 	return 0;
 }
 
@@ -3795,10 +3924,389 @@ void set_radio_mode(char *mode){
 }
 
 
+static void scan_add_hit(int f, int db, int w){
+	for (int i = 0; i < scan_nhits; i++){
+		if (abs(scan_hit_f[i] - f) < 1000){
+			if (db > scan_hit_db[i]){ scan_hit_f[i]=f; scan_hit_db[i]=db; scan_hit_w[i]=w; }
+			return;
+		}
+	}
+	if (scan_nhits < SCAN_MAX_HITS){
+		scan_hit_f[scan_nhits]=f; scan_hit_db[scan_nhits]=db; scan_hit_w[scan_nhits]=w; scan_nhits++;
+	}
+}
+
+static void scan_report(){
+	char b[120];
+	for (int i=0;i<scan_nhits;i++) for(int j=i+1;j<scan_nhits;j++)
+		if (scan_hit_db[j] > scan_hit_db[i]){
+			int t;
+			t=scan_hit_f[i];scan_hit_f[i]=scan_hit_f[j];scan_hit_f[j]=t;
+			t=scan_hit_db[i];scan_hit_db[i]=scan_hit_db[j];scan_hit_db[j]=t;
+			t=scan_hit_w[i];scan_hit_w[i]=scan_hit_w[j];scan_hit_w[j]=t;
+		}
+	sprintf(b, "== Scan done: %d active ==\n", scan_nhits);
+	write_console(FONT_LOG, b);
+	for (int i = 0; i < scan_nhits && i < 15; i++){
+		const char *m = scan_hit_w[i] <= 3 ? "CW " : (scan_hit_w[i] <= 25 ? "DIG" : "SSB");
+		sprintf(b, "%d.%d %s (%d)\n", scan_hit_f[i]/1000, (scan_hit_f[i]%1000)/100, m, scan_hit_db[i]);
+		write_console(FONT_LOG, b);
+	}
+}
+
+// OPTIMIZE: one-tap best-settings from live spectrum analysis
+static void do_optimize(){
+	extern int spectrum_plot[];
+	int m_id = mode_id(field_str("MODE"));
+	int freq = atoi(get_field("r1:freq")->value);
+	long s = 0; int n = 0, i;
+	for (i = 1276; i <= 1796; i++){ s += spectrum_plot[i]; n++; }
+	int mean = (int)(s/n);
+	long s2 = 0; int n2 = 0;
+	for (i = 1276; i <= 1796; i++) if (spectrum_plot[i] <= mean){ s2 += spectrum_plot[i]; n2++; }
+	int nf = n2 ? (int)(s2/n2) : mean;
+	int pk = -1000, pki = 1536;
+	for (i = 1536-107; i <= 1536+107; i++)
+		if (spectrum_plot[i] > pk){ pk = spectrum_plot[i]; pki = i; }
+	int snr = pk - nf;
+	int crowded = 0;
+	for (i = 1536-106; i <= 1536+106; i++)
+		if (spectrum_plot[i] > nf+10 && spectrum_plot[i] >= spectrum_plot[i-1]
+			&& spectrum_plot[i] > spectrum_plot[i+1] && abs(i-pki) > 8) crowded++;
+	int off = ((pki-1536)*46875)/1000;
+	// SMARTMODE: with SMART ON, detect the parked signal's mode from its width
+	if (!strcmp(field_str("SMART"), "ON") && snr > 10){
+		int lo = pki, hi = pki, cut = pk - 6;
+		while (lo > 1276 && spectrum_plot[lo-1] > cut) lo--;
+		while (hi < 1796 && spectrum_plot[hi+1] > cut) hi++;
+		int w = hi - lo + 1;
+		const char *want = w <= 3 ? "CW" : (w <= 25 ? "FT8" : (freq < 10000000 ? "LSB" : "USB"));
+		if (strcmp(field_str("MODE"), want)){
+			field_set("MODE", want);
+			m_id = mode_id(field_str("MODE"));
+			char mm[80]; sprintf(mm, "OPT: detected %s (width %d bins)\n", want, w);
+			write_console(FONT_LOG, mm);
+		}
+	}
+	char msg[160]; msg[0] = 0;
+	if (m_id == MODE_USB || m_id == MODE_LSB){
+		field_set("AGC", snr > 25 ? "SLOW" : "MED");
+		field_set("BW", crowded > 3 ? "1800" : "2400");
+		field_set("SPAN", "10K");
+		sprintf(msg, "OPT: BW %s AGC %s SPAN 10K (snr %d nbr %d)\n",
+			crowded > 3 ? "1800" : "2400", snr > 25 ? "SLOW" : "MED", snr, crowded);
+	}
+	else if (m_id == MODE_CW || m_id == MODE_CWR){
+		field_set("AGC", "FAST");
+		field_set("BW", crowded > 3 ? "300" : "400");
+		field_set("SPAN", "2.5K");
+		if (snr > 8 && abs(off) > 40 && abs(off) < 2500){
+			char sr[100], fb[20];
+			set_operating_freq(freq + off, sr);
+			sprintf(fb, "%d", freq + off);
+			field_set("FREQ", fb);
+			sprintf(msg, "OPT: CW BW %s AGC FAST, nudged %+d Hz (snr %d)\n",
+				crowded > 3 ? "300" : "400", off, snr);
+		} else
+			sprintf(msg, "OPT: CW BW %s AGC FAST SPAN 2.5K (snr %d)\n",
+				crowded > 3 ? "300" : "400", snr);
+	}
+	else if (m_id == MODE_AM){
+		field_set("AGC", "SLOW");
+		field_set("BW", "6000");
+		field_set("SPAN", "10K");
+		if (snr > 10 && abs(off) > 100 && abs(off) < 6000){
+			char sr[100], fb[20];
+			set_operating_freq(freq + off, sr);
+			sprintf(fb, "%d", freq + off);
+			field_set("FREQ", fb);
+			sprintf(msg, "OPT: AM locked to carrier %+d Hz (snr %d)\n", off, snr);
+		} else
+			sprintf(msg, "OPT: AM BW 6000 AGC SLOW (snr %d)\n", snr);
+	}
+	else if (m_id == MODE_FT8){
+		field_set("BW", "4000");
+		field_set("SPAN", "25K");
+		sprintf(msg, "OPT: FT8 BW 4000 SPAN 25K\n");
+	}
+	else
+		sprintf(msg, "OPT: mode %s - no tuner rules yet\n", field_str("MODE"));
+	if (msg[0]) write_console(FONT_LOG, msg);
+}
+
+// ADVISOR: passive suggestions when SMART is ON - never applies anything itself
+static char adv_last[64] = "";
+static int adv_force = 0;
+static void do_advise(){
+	if (strcmp(field_str("SMART"), "ON") && !adv_force) return;
+	if (in_tx) return;
+	extern int spectrum_plot[];
+	int m_id = mode_id(field_str("MODE"));
+	if (!(m_id==MODE_USB||m_id==MODE_LSB||m_id==MODE_CW||m_id==MODE_CWR||m_id==MODE_AM||m_id==MODE_FT8)) return;
+	long s = 0; int n = 0, i;
+	for (i = 1276; i <= 1796; i++){ s += spectrum_plot[i]; n++; }
+	int mean = (int)(s/n);
+	long s2 = 0; int n2 = 0;
+	for (i = 1276; i <= 1796; i++) if (spectrum_plot[i] <= mean){ s2 += spectrum_plot[i]; n2++; }
+	int nf = n2 ? (int)(s2/n2) : mean;
+	int pk = -1000, pki = 1536;
+	for (i = 1536-107; i <= 1536+107; i++)
+		if (spectrum_plot[i] > pk){ pk = spectrum_plot[i]; pki = i; }
+	int snr = pk - nf;
+	int crowded = 0;
+	for (i = 1536-106; i <= 1536+106; i++)
+		if (spectrum_plot[i] > nf+10 && spectrum_plot[i] >= spectrum_plot[i-1]
+			&& spectrum_plot[i] > spectrum_plot[i+1] && abs(i-pki) > 8) crowded++;
+	char bw[10], agc[10];
+	if (m_id == MODE_CW || m_id == MODE_CWR){
+		strcpy(bw, crowded > 3 ? "300" : "400"); strcpy(agc, "FAST");
+	} else if (m_id == MODE_AM){
+		strcpy(bw, "6000"); strcpy(agc, "SLOW");
+	} else if (m_id == MODE_FT8){
+		strcpy(bw, "4000"); strcpy(agc, field_str("AGC"));
+	} else {
+		strcpy(bw, crowded > 3 ? "1800" : "2400"); strcpy(agc, snr > 25 ? "SLOW" : "MED");
+	}
+	char sig[64]; sprintf(sig, "%s|%s", bw, agc);
+	int same_now = (!strcmp(field_str("BW"), bw) && !strcmp(field_str("AGC"), agc));
+	if (adv_force){
+		adv_force = 0;
+		strcpy(adv_last, sig);
+		char m[100];
+		if (same_now) sprintf(m, "ADV: settings look good\n");
+		else sprintf(m, "ADV: try BW %s AGC %s - tap OPT\n", bw, agc);
+		write_console(FONT_LOG, m);
+		return;
+	}
+	if (!strcmp(sig, adv_last)) return;
+	strcpy(adv_last, sig);
+	if (same_now) return;
+	char m[100]; sprintf(m, "ADV: try BW %s AGC %s - tap OPT\n", bw, agc);
+	write_console(FONT_LOG, m);
+}
+
+static void scan_tick(){
+	if (!scan_active) return;
+	{ int cfx = atoi(get_field("r1:freq")->value);
+	  if (scan_last_set && cfx != scan_last_set){
+		scan_active = 0;
+		field_set("SCAN", "OFF");
+		write_console(FONT_LOG, "Scan stopped (manual tune)\n");
+		return; } }
+	if (scan_settle){ scan_settle--; return; }
+	extern int spectrum_plot[];
+	for (int i = 1536-260; i <= 1536+260; i++){
+		if (spectrum_plot[i] > scan_thresh
+			&& spectrum_plot[i] >= spectrum_plot[i-1]
+			&& spectrum_plot[i] >  spectrum_plot[i+1]
+			&& spectrum_plot[i] >= spectrum_plot[i-2]
+			&& spectrum_plot[i] >  spectrum_plot[i+2]){
+			int lo = i, hi = i, cut = spectrum_plot[i] - 6;
+			while (lo > 1276 && spectrum_plot[lo-1] > cut) lo--;
+			while (hi < 1796 && spectrum_plot[hi+1] > cut) hi++;
+			int hf = scan_cur + (((i-1536)*46875)/1000);
+			scan_add_hit(hf, spectrum_plot[i], hi-lo+1);
+		}
+	}
+	scan_cur += 20000;
+	if (scan_cur > scan_hi || scan_cur < scan_lo){
+		scan_active = 0;
+		char sr[100]; char fb[20];
+		set_operating_freq(scan_return_freq, sr);
+		sprintf(fb, "%d", scan_return_freq);
+		field_set("FREQ", fb);
+		field_set("SCAN", "OFF");
+		scan_report();
+		return;
+	}
+	{ char sr[100]; char fb[20];
+	  set_operating_freq(scan_cur, sr);
+	  sprintf(fb, "%d", scan_cur);
+	  field_set("FREQ", fb);
+	  scan_last_set = scan_cur; }
+	scan_settle = 1;
+}
+
+// ---- ROBO: auto band-hop to the busiest FT8 band (pskreporter, grid-localized) ----
+static long robo_last_fetch = 0;
+static int robo_pending = 0;   // 1 = manual ftbest, 2 = robo cycle
+static int robo_wait = 0;
+
+void robo_request(int manual){
+	char rcmd[420];
+	sprintf(rcmd,
+		"curl -s --max-time 12 'https://pskreporter.info/cgi-bin/psk-freq.pl?mode=FT8' -o /tmp/pskfreq.txt.tmp 2>/dev/null && mv /tmp/pskfreq.txt.tmp /tmp/pskfreq.txt; "
+		"curl -s --max-time 12 'https://retrieve.pskreporter.info/query?senderCallsign=%s&flowStartSeconds=-900&rronly=1' -o /tmp/pskr_mine.xml.tmp 2>/dev/null && mv /tmp/pskr_mine.xml.tmp /tmp/pskr_mine.xml &",
+		get_field("#mycallsign")->value);
+	system(rcmd);
+	robo_wait = 20;   // parsed ~20s later by robo_tick (1 Hz)
+	robo_pending = manual ? 1 : 2;
+}
+
+static void robo_apply(int report_only){
+	static const int dial[] = {3573000,7074000,10136000,14074000,18100000,21074000,24915000,28074000};
+	static const int bin[]  = {3570000,7070000,10140000,14070000,18100000,21070000,24920000,28070000};
+	static const char *bname[] = {"80m","40m","30m","20m","17m","15m","12m","10m"};
+	int spots[8];
+	char line[100], note[160];
+	memset(spots, 0, sizeof(spots));
+	FILE *pf = fopen("/tmp/pskfreq.txt", "r");
+	if (!pf){
+		write_console(FONT_LOG, "FTBEST: no data (no internet?)\n");
+		return;
+	}
+	while (fgets(line, sizeof(line), pf)){
+		long f; int score, nsp;
+		if (sscanf(line, "%ld %d %d", &f, &score, &nsp) == 3)
+			for (int i = 0; i < 8; i++)
+				if ((long)bin[i] == f)
+					spots[i] = nsp;
+	}
+	fclose(pf);
+	extern int hunt_band_ok(int f);
+	int cur = field_int("FREQ"), curi = -1, best = -1;
+	for (int i = 0; i < 8; i++){
+		if (abs(cur - dial[i]) < 20000) curi = i;
+		if (!hunt_band_ok(dial[i])) continue; // not preselected or SWR-blacklisted
+		if (best < 0 || spots[i] > spots[best]) best = i;
+	}
+	int n = sprintf(note, "FT8 spots/5min:");
+	for (int i = 0; i < 8; i++)
+		n += sprintf(note + n, " %s:%d", bname[i], spots[i]);
+	sprintf(note + n, "\n");
+	write_console(FONT_LOG, note);
+	// where OUR signal is being heard (pskreporter reception reports, 15 min)
+	{	FILE *mfp = fopen("/tmp/pskr_mine.xml", "r");
+		if (mfp){
+			static const char *mbn[] = {"80m","40m","30m","20m","17m","15m","12m","10m"};
+			int mine[8], mtot = 0;
+			char mline[512];
+			memset(mine, 0, sizeof(mine));
+			while (fgets(mline, sizeof(mline), mfp)){
+				char *pp = mline;
+				while ((pp = strstr(pp, "frequency=\""))){
+					long mfq = atol(pp + 11);
+					int mi = -1;
+					switch((int)(mfq / 1000000)){
+						case 3: mi = 0; break; case 7: mi = 1; break;
+						case 10: mi = 2; break; case 14: mi = 3; break;
+						case 18: mi = 4; break; case 21: mi = 5; break;
+						case 24: mi = 6; break; case 28: case 29: mi = 7; break;
+					}
+					if (mi >= 0){ mine[mi]++; mtot++; }
+					pp += 11;
+				}
+			}
+			fclose(mfp);
+			if (mtot){
+				int mn = sprintf(note, "Your signal heard %dx/15min:", mtot);
+				for (int i = 0; i < 8; i++)
+					if (mine[i])
+						mn += sprintf(note + mn, " %s:%d", mbn[i], mine[i]);
+				sprintf(note + mn, "\n");
+			}
+			else
+				sprintf(note, "Your signal: no spots in the last 15min\n");
+			write_console(FONT_LOG, note);
+		}
+	}
+	if (best < 0 || spots[best] == 0)
+		return;
+	sprintf(note, "FTBEST: %s (%d spots)\n", bname[best], spots[best]);
+	write_console(FONT_LOG, note);
+	if (report_only || best == curi)
+		return;
+	// hysteresis: only hop when clearly better than the current band
+	if (curi >= 0 && spots[best] < spots[curi] * 2 + 3)
+		return;
+	if (strlen(get_field_by_label("CALL")->value)){ // mid-QSO: hop when done
+		extern int robo_hop_dial_set(int);
+		robo_hop_dial_set(dial[best]);
+		sprintf(note, "ROBO: will QSY to %s after this QSO\n", bname[best]);
+		write_console(FONT_LOG, note);
+		return;
+	}
+	char fb[20], sr[100];
+	sprintf(note, "ROBO: QSY %s -> %s (%d spots)\n", curi >= 0 ? bname[curi] : "?", bname[best], spots[best]);
+	write_console(FONT_LOG, note);
+	set_operating_freq(dial[best], sr);
+	sprintf(fb, "%d", dial[best]);
+	field_set("FREQ", fb);
+}
+int robo_hop_dial_set(int d); // defined below robo_tick
+
+static int robo_hop_dial = 0;   // QSY deferred until the current QSO finishes
+int robo_swr_flee = 0;          // set by the modem when SWR aborts a TX: hop now
+int robo_hop_dial_set(int d){ robo_hop_dial = d; return d; }
+static void robo_tick(){
+	struct field *fa = get_field("#ft8_auto");
+	int robo_on = fa && !strcmp(fa->value, "ROBO");
+	static int was_robo = 0;
+	time_t now = time(NULL);
+	if (robo_on && !was_robo){ // just switched on: check the bands right away
+		write_console(FONT_LOG, "ROBO: checking band activity...\n");
+		robo_request(0);
+		robo_last_fetch = now;
+	}
+	was_robo = robo_on;
+	if (!robo_on)
+		robo_hop_dial = 0;
+	if (robo_on && mode_id(get_field("r1:mode")->value) == MODE_FT8){
+		if (now - robo_last_fetch >= 600 && !robo_pending){ // fetch even mid-QSO
+			robo_last_fetch = now;
+			robo_request(0);
+		}
+	}
+	if (robo_pending && robo_wait > 0 && --robo_wait == 0){
+		int manual = (robo_pending == 1);
+		robo_pending = 0;
+		robo_apply(manual || !robo_on);
+	}
+	if (robo_swr_flee && robo_on){ // bad SWR: leave this band right away
+		robo_swr_flee = 0;
+		write_console(FONT_LOG, "ROBO: fleeing bad-SWR band...\n");
+		robo_apply(0); // uses the cached activity list; current band is blacklisted
+	}
+	else if (robo_swr_flee)
+		robo_swr_flee = 0;
+	if (robo_hop_dial && robo_on && !strlen(get_field_by_label("CALL")->value)){
+		char fb[20], sr[100], note[80];
+		sprintf(note, "ROBO: QSY to %d kHz now\n", robo_hop_dial/1000);
+		write_console(FONT_LOG, note);
+		set_operating_freq(robo_hop_dial, sr);
+		sprintf(fb, "%d", robo_hop_dial);
+		field_set("FREQ", fb);
+		robo_hop_dial = 0;
+	}
+}
+
 gboolean ui_tick(gpointer gook){
 	int static ticks = 0;
 
 	ticks++;
+	static int st_pushed = 0;
+	if (!st_pushed && ticks >= 50){ //one-shot: push the saved sidetone level to the DSP (its default is full volume)
+		st_pushed = 1;
+		char sb[30], sr[20];
+		sprintf(sb, "sidetone=%d", field_int("SIDETONE"));
+		sdr_request(sb, sr);
+	}
+	static int session_marked = 0;
+	if (!session_marked && ticks >= 60){ //one-shot: session marker for the log browser
+		session_marked = 1;
+		FILE *sf = fopen("/home/pi/sbitx/data/sessions.csv", "a");
+		if (sf){
+			time_t rt = time(NULL);
+			struct tm *tt = gmtime(&rt);
+			fprintf(sf, "START,%04d-%02d-%02d %02d:%02d:%02d,\"%s %s\"\n",
+				tt->tm_year+1900, tt->tm_mon+1, tt->tm_mday, tt->tm_hour, tt->tm_min, tt->tm_sec,
+				get_field("#mycallsign")->value, get_field("#mygrid")->value);
+			fclose(sf);
+		}
+	}
+	if (ticks % 100 == 0){ scan_tick(); robo_tick(); }
+	if (ticks % 10 == 0) wf_auto_ref();
+	if (ticks % 1200 == 0) do_advise();
 
 	while (q_length(&q_remote_commands) > 0){
 		//read each command until the 
@@ -4117,8 +4625,9 @@ void change_band(char *request){
 	char resp[100];
 	set_operating_freq(band_stack[new_band].freq[stack], resp);
 	field_set("FREQ", buff);
-	field_set("MODE", mode_name[band_stack[new_band].mode[stack]]);	
-	update_field(get_field("r1:mode"));
+	// KEEPMODE: band change no longer forces the per-band stored mode (user request 2026-07-03)
+	//field_set("MODE", mode_name[band_stack[new_band].mode[stack]]);	
+	//update_field(get_field("r1:mode"));
 
   // this fixes bug with filter settings not being applied after a band change, not sure why it's a bug - k3ng 2022-09-03
 //  set_field("r1:low",get_field("r1:low")->value);
@@ -4212,6 +4721,23 @@ void do_control_action(char *cmd){
 	}
 	else if (!strcmp(request, "SET"))
 		settings_ui(window);
+	else if (!strcmp(request, "SCAN ON")){
+		int cf = atoi(get_field("r1:freq")->value);
+		int mb = sizeof(band_stack)/sizeof(struct band), bi;
+		for (bi = 0; bi < mb; bi++)
+			if (band_stack[bi].start <= cf && cf <= band_stack[bi].stop) break;
+		if (bi < mb){ scan_lo = band_stack[bi].start; scan_hi = band_stack[bi].stop; }
+		else { scan_lo = cf - 100000; scan_hi = cf + 100000; }
+		scan_cur = cf; scan_last_set = 0;
+		scan_return_freq = cf; scan_nhits = 0;
+		scan_active = 1;
+		char sbuf[100]; sprintf(sbuf, "Band scan: %d-%d kHz\n", scan_lo/1000, scan_hi/1000);
+		write_console(FONT_LOG, sbuf);
+	}
+	else if (!strcmp(request, "SCAN OFF")){ scan_active = 0; write_console(FONT_LOG, "Band scan stopped\n"); }
+	else if (!strcmp(request, "WIDE ON") || !strcmp(request, "WIDE OFF")){ layout_ui(); }
+	else if (!strcmp(request, "OPT")){ do_optimize(); }
+	else if (!strcmp(request, "SMART ON")){ adv_force = 1; do_advise(); }
 	else if (!strcmp(request, "LOG"))
 		logbook_list_open();
 	else if (!strncmp(request, "BW ",3)){
@@ -4518,6 +5044,108 @@ void cmd_exec(char *cmd){
 	else if (!strcmp(exec, "mode") || !strcmp(exec, "m") || !strcmp(exec, "MODE")){
 		set_radio_mode(args);
 		update_field(get_field("r1:mode"));
+	}
+	else if (!strcmp(exec, "queue")){
+		extern void hunt_queue_report();
+		hunt_queue_report();
+	}
+	else if (!strcmp(exec, "huntmode")){
+		extern void hunt_mode_set(int);
+		int m = !strcmp(args, "hyper") ? 2 : !strcmp(args, "medium") ? 1 : 0;
+		hunt_mode_set(m);
+		char hm[60];
+		sprintf(hm, "hunter mode: %s\n", m == 2 ? "HYPER" : m == 1 ? "MEDIUM" : "NORMAL");
+		write_console(FONT_LOG, hm);
+	}
+	else if (!strcmp(exec, "huntskip")){
+		FILE *sf2 = fopen("/home/pi/sbitx/data/hunt_skip.txt", "w");
+		if (sf2){
+			fprintf(sf2, "%s\n", strlen(args) ? args : "none");
+			fclose(sf2);
+		}
+		char hs[130];
+		sprintf(hs, "hunter skip prefixes: %s\n", strlen(args) ? args : "none");
+		write_console(FONT_LOG, hs);
+	}
+	else if (!strcmp(exec, "robobands")){
+		FILE *bf = fopen("/home/pi/sbitx/data/robo_bands.txt", "w");
+		if (bf){
+			fprintf(bf, "%s\n", strlen(args) ? args : "all");
+			fclose(bf);
+		}
+		char rb[120];
+		sprintf(rb, "auto bands: %s\n", strlen(args) ? args : "all");
+		write_console(FONT_LOG, rb);
+	}
+	else if (!strcmp(exec, "txbest")){
+		extern int txbest_pick();
+		char ps[12], msg[60];
+		int p = txbest_pick();
+		sprintf(ps, "%d", p);
+		field_set("TX_PITCH", ps);
+		sprintf(msg, "TX offset moved to clearest slot: %d Hz\n", p);
+		write_console(FONT_LOG, msg);
+	}
+	else if (!strcmp(exec, "screen")){
+		char sb[120];
+		sb[0] = 0;
+		if (!strcmp(args, "off") || !strcmp(args, "on"))
+			sprintf(sb, "/home/pi/sbitx/screenctl.sh %s &", args);
+		else if (atoi(args) >= 5 && atoi(args) <= 100)
+			sprintf(sb, "/home/pi/sbitx/screenctl.sh %d &", atoi(args));
+		else
+			write_console(FONT_LOG, "screen off|on|5..100\n");
+		if (sb[0])
+			system(sb);
+	}
+	else if (!strcmp(exec, "silent")){
+		char rr[20];
+		field_set("AUDIO", "0");
+		sdr_request("r1:volume=0", rr);
+		sdr_request("sidetone=0", rr);
+		system("/home/pi/sbitx/screenctl.sh off &");
+		write_console(FONT_LOG, "SILENT: audio 0, sidetone 0, screen off. 'wake' restores\n");
+	}
+	else if (!strcmp(exec, "wake")){
+		char rr[20], sb[30];
+		field_set("AUDIO", "80");
+		sdr_request("r1:volume=80", rr);
+		sprintf(sb, "sidetone=%d", field_int("SIDETONE"));
+		sdr_request(sb, rr);
+		system("/home/pi/sbitx/screenctl.sh on &");
+		write_console(FONT_LOG, "awake\n");
+	}
+	else if (!strcmp(exec, "session")){
+		FILE *sf = fopen("/home/pi/sbitx/data/sessions.csv", "a");
+		if (sf){
+			time_t rt = time(NULL);
+			struct tm *tt = gmtime(&rt);
+			fprintf(sf, "META,%04d-%02d-%02d %02d:%02d:%02d,\"%s\"\n",
+				tt->tm_year+1900, tt->tm_mon+1, tt->tm_mday, tt->tm_hour, tt->tm_min, tt->tm_sec, args);
+			fclose(sf);
+		}
+		if (!strncmp(args, "antenna=", 8)){
+			FILE *af = fopen("/home/pi/sbitx/data/antenna.txt", "w");
+			if (af){ fprintf(af, "%s\n", args + 8); fclose(af); }
+		}
+		write_console(FONT_LOG, "session note saved\n");
+	}
+	else if (!strcmp(exec, "ftbest")){
+		write_console(FONT_LOG, "FTBEST: checking pskreporter (~20s)...\n");
+		robo_request(1);
+	}
+	else if (!strcmp(exec, "span")){
+		if (!strcmp(args, "25K") || !strcmp(args, "10K") || !strcmp(args, "6K") || !strcmp(args, "2.5K"))
+			field_set("SPAN", args);
+		else
+			write_console(FONT_LOG, "span 25K|10K|6K|2.5K\n");
+	}
+	else if (!strcmp(exec, "bmask")){
+		extern void bmask_dump();
+		extern int bmask_masked_count, bmask_rising_count;
+		bmask_dump();
+		sprintf(response, "BMASK: %d masked, %d rising\n", bmask_masked_count, bmask_rising_count);
+		write_console(FONT_LOG, response);
 	}
 	else if (!strcmp(exec, "t"))
 		tx_on(TX_SOFT);

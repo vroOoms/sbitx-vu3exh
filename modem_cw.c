@@ -512,6 +512,12 @@ static void cw_rx_match_letter(struct cw_decoder *p){
 		return;
 	}
 
+	// CWSQL: decode squelch - suppress gibberish when signal is barely above the noise
+	if (p->high_level < p->noise_floor * 3){
+		p->next_symbol = 0;
+		return;
+	}
+
 	int len = p->next_symbol;
 	int in_mark = 0;
 	int total_ticks = 0;

@@ -1,0 +1,495 @@
+prefix,country
+VU,India
+AT,India
+8T,India
+AP,Pakistan
+S2,Bangladesh
+4S,Sri Lanka
+9N,Nepal
+A5,Bhutan
+JA,Japan
+JE,Japan
+JF,Japan
+JG,Japan
+JH,Japan
+JI,Japan
+JJ,Japan
+JK,Japan
+JL,Japan
+JM,Japan
+JN,Japan
+JO,Japan
+JP,Japan
+JQ,Japan
+JR,Japan
+JS,Japan
+7J,Japan
+7K,Japan
+7L,Japan
+7M,Japan
+7N,Japan
+8J,Japan
+B,China
+BA,China
+BD,China
+BG,China
+BH,China
+BI,China
+BJ,China
+BL,China
+BM,Taiwan
+BU,Taiwan
+BV,Taiwan
+BX,Taiwan
+BY,China
+VR2,Hong Kong
+XX9,Macao
+HL,South Korea
+DS,South Korea
+DT,South Korea
+6K,South Korea
+6L,South Korea
+6M,South Korea
+6N,South Korea
+P5,North Korea
+YB,Indonesia
+YC,Indonesia
+YD,Indonesia
+YE,Indonesia
+YF,Indonesia
+YG,Indonesia
+YH,Indonesia
+8A,Indonesia
+8B,Indonesia
+8C,Indonesia
+8D,Indonesia
+8E,Indonesia
+8F,Indonesia
+8G,Indonesia
+8H,Indonesia
+8I,Indonesia
+9M2,West Malaysia
+9M4,West Malaysia
+9M6,East Malaysia
+9M8,East Malaysia
+9W,Malaysia
+9V,Singapore
+HS,Thailand
+E2,Thailand
+XV,Vietnam
+3W,Vietnam
+XU,Cambodia
+XW,Laos
+XZ,Myanmar
+DU,Philippines
+DV,Philippines
+DW,Philippines
+DX,Philippines
+DY,Philippines
+DZ,Philippines
+4W,Timor-Leste
+V8,Brunei
+UN,Kazakhstan
+UP,Kazakhstan
+EX,Kyrgyzstan
+EY,Tajikistan
+EZ,Turkmenistan
+UK,Uzbekistan
+UA2,Kaliningrad
+UA8,Asiatic Russia
+UA9,Asiatic Russia
+UA0,Asiatic Russia
+RA8,Asiatic Russia
+RA9,Asiatic Russia
+RA0,Asiatic Russia
+R8,Asiatic Russia
+R9,Asiatic Russia
+R0,Asiatic Russia
+UA,European Russia
+RA,European Russia
+RU,European Russia
+RV,European Russia
+RW,European Russia
+RX,European Russia
+RZ,European Russia
+R1,European Russia
+R2,European Russia
+R3,European Russia
+R4,European Russia
+R5,European Russia
+R6,European Russia
+R7,European Russia
+UR,Ukraine
+US,Ukraine
+UT,Ukraine
+UU,Ukraine
+UV,Ukraine
+UW,Ukraine
+UX,Ukraine
+UY,Ukraine
+UZ,Ukraine
+EM,Ukraine
+EN,Ukraine
+EO,Ukraine
+EU,Belarus
+EV,Belarus
+EW,Belarus
+YL,Latvia
+LY,Lithuania
+ES,Estonia
+OH,Finland
+OF,Finland
+OG,Finland
+SM,Sweden
+SA,Sweden
+SB,Sweden
+SC,Sweden
+SD,Sweden
+SE,Sweden
+SF,Sweden
+SG,Sweden
+SH,Sweden
+SI,Sweden
+SJ,Sweden
+SK,Sweden
+SL,Sweden
+LA,Norway
+LB,Norway
+LC,Norway
+LG,Norway
+LJ,Norway
+LN,Norway
+OZ,Denmark
+OU,Denmark
+OV,Denmark
+OY,Faroe Islands
+OX,Greenland
+TF,Iceland
+G,England
+M,England
+2E,England
+GM,Scotland
+MM,Scotland
+2M,Scotland
+GW,Wales
+MW,Wales
+2W,Wales
+GI,Northern Ireland
+MI,Northern Ireland
+GD,Isle of Man
+GU,Guernsey
+GJ,Jersey
+EI,Ireland
+EJ,Ireland
+F,France
+TM,France
+TK,Corsica
+DL,Germany
+DA,Germany
+DB,Germany
+DC,Germany
+DD,Germany
+DE,Germany
+DF,Germany
+DG,Germany
+DH,Germany
+DJ,Germany
+DK,Germany
+DM,Germany
+DN,Germany
+DO,Germany
+DP,Germany
+DR,Germany
+PA,Netherlands
+PB,Netherlands
+PC,Netherlands
+PD,Netherlands
+PE,Netherlands
+PF,Netherlands
+PG,Netherlands
+PH,Netherlands
+PI,Netherlands
+ON,Belgium
+OO,Belgium
+OP,Belgium
+OQ,Belgium
+OR,Belgium
+OS,Belgium
+OT,Belgium
+LX,Luxembourg
+HB9,Switzerland
+HB3,Switzerland
+HB0,Liechtenstein
+OE,Austria
+I,Italy
+IK,Italy
+IZ,Italy
+IU,Italy
+IW,Italy
+IS0,Sardinia
+IT9,Sicily
+EA,Spain
+EB,Spain
+EC,Spain
+ED,Spain
+EE,Spain
+EF,Spain
+EG,Spain
+EH,Spain
+EA6,Balearic Islands
+EA8,Canary Islands
+EA9,Ceuta & Melilla
+CT,Portugal
+CR,Portugal
+CS,Portugal
+CT3,Madeira
+CU,Azores
+SP,Poland
+SN,Poland
+SO,Poland
+SQ,Poland
+SR,Poland
+3Z,Poland
+HF,Poland
+OK,Czech Republic
+OL,Czech Republic
+OM,Slovakia
+HA,Hungary
+HG,Hungary
+YO,Romania
+YP,Romania
+YQ,Romania
+YR,Romania
+LZ,Bulgaria
+SV,Greece
+SW,Greece
+SX,Greece
+SY,Greece
+SZ,Greece
+SV5,Dodecanese
+SV9,Crete
+9A,Croatia
+S5,Slovenia
+E7,Bosnia-Herzegovina
+YU,Serbia
+YT,Serbia
+Z3,North Macedonia
+Z6,Kosovo
+4O,Montenegro
+ZA,Albania
+9H,Malta
+5B,Cyprus
+C4,Cyprus
+H2,Cyprus
+TA,Turkey
+TB,Turkey
+TC,Turkey
+YM,Turkey
+4X,Israel
+4Z,Israel
+OD,Lebanon
+YK,Syria
+JY,Jordan
+YI,Iraq
+EP,Iran
+EQ,Iran
+HZ,Saudi Arabia
+7Z,Saudi Arabia
+8Z,Saudi Arabia
+A4,Oman
+A6,United Arab Emirates
+A7,Qatar
+A9,Bahrain
+9K,Kuwait
+7O,Yemen
+YA,Afghanistan
+T6,Afghanistan
+EK,Armenia
+4J,Azerbaijan
+4K,Azerbaijan
+4L,Georgia
+SU,Egypt
+CN,Morocco
+7X,Algeria
+3V,Tunisia
+5A,Libya
+ST,Sudan
+ET,Ethiopia
+5Z,Kenya
+5H,Tanzania
+5X,Uganda
+9J,Zambia
+Z2,Zimbabwe
+7Q,Malawi
+C9,Mozambique
+A2,Botswana
+V5,Namibia
+ZS,South Africa
+ZR,South Africa
+ZT,South Africa
+ZU,South Africa
+3DA,Eswatini
+7P,Lesotho
+5R,Madagascar
+3B8,Mauritius
+S7,Seychelles
+D4,Cape Verde
+6W,Senegal
+9G,Ghana
+5N,Nigeria
+TJ,Cameroon
+TR,Gabon
+9Q,DR Congo
+TN,Congo
+D2,Angola
+K,USA
+W,USA
+N,USA
+AA,USA
+AB,USA
+AC,USA
+AD,USA
+AE,USA
+AF,USA
+AG,USA
+AI,USA
+AJ,USA
+AK,USA
+KH6,Hawaii
+KL7,Alaska
+KP4,Puerto Rico
+VE,Canada
+VA,Canada
+VO,Canada
+VY,Canada
+XE,Mexico
+XF,Mexico
+4A,Mexico
+6D,Mexico
+TG,Guatemala
+YS,El Salvador
+HR,Honduras
+YN,Nicaragua
+TI,Costa Rica
+HP,Panama
+HI,Dominican Republic
+CO,Cuba
+CM,Cuba
+6Y,Jamaica
+8P,Barbados
+9Y,Trinidad & Tobago
+P4,Aruba
+PJ2,Curacao
+PJ4,Bonaire
+V4,St Kitts & Nevis
+J3,Grenada
+J6,St Lucia
+J7,Dominica
+J8,St Vincent
+FG,Guadeloupe
+FM,Martinique
+ZF,Cayman Islands
+C6,Bahamas
+VP9,Bermuda
+HH,Haiti
+YV,Venezuela
+HK,Colombia
+HC,Ecuador
+OA,Peru
+CP,Bolivia
+PY,Brazil
+PP,Brazil
+PQ,Brazil
+PR,Brazil
+PS,Brazil
+PT,Brazil
+PU,Brazil
+PV,Brazil
+PW,Brazil
+PX,Brazil
+ZP,Paraguay
+LU,Argentina
+L2,Argentina
+L3,Argentina
+L4,Argentina
+L5,Argentina
+L6,Argentina
+L7,Argentina
+L8,Argentina
+L9,Argentina
+AY,Argentina
+AZ,Argentina
+CX,Uruguay
+CA,Chile
+CB,Chile
+CC,Chile
+CD,Chile
+CE,Chile
+8R,Guyana
+PZ,Suriname
+FY,French Guiana
+VK,Australia
+VJ,Australia
+VL,Australia
+VM,Australia
+VN,Australia
+VZ,Australia
+ZL,New Zealand
+ZM,New Zealand
+P2,Papua New Guinea
+3D2,Fiji
+5W,Samoa
+A3,Tonga
+FK,New Caledonia
+FO,French Polynesia
+KH2,Guam
+T8,Palau
+V6,Micronesia
+V7,Marshall Islands
+C2,Nauru
+T2,Tuvalu
+T30,West Kiribati
+H4,Solomon Islands
+YJ,Vanuatu
+E5,Cook Islands
+ZK3,Tokelau
+9U,Burundi
+9X,Rwanda
+TT,Chad
+TY,Benin
+TZ,Mali
+XT,Burkina Faso
+5T,Mauritania
+5U,Niger
+5V,Togo
+9L,Sierra Leone
+EL,Liberia
+TU,Ivory Coast
+C5,Gambia
+J5,Guinea-Bissau
+3X,Guinea
+D6,Comoros
+ER,Moldova
+T7,San Marino
+HV,Vatican
+1A,SMOM
+3A,Monaco
+C3,Andorra
+JW,Svalbard
+JX,Jan Mayen
+ZB2,Gibraltar
+9H4,Malta
+FR,Reunion
+FT,French Southern
+VP8,Falkland Islands
+CE9,Antarctica
+KC4,Antarctica
+DP0,Antarctica
+8Q,Maldives
+VQ9,Chagos
+S0,Western Sahara
+Z8,South Sudan
+E3,Eritrea
+J2,Djibouti
+6O,Somalia
+T5,Somalia

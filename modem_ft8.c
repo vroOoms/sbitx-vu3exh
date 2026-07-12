@@ -38,6 +38,505 @@ static int	ft8_mode = FT8_SEMI;
 static pthread_t ft8_thread;
 static int ft8_tx1st = 1;
 void ft8_tx(char *message, int freq);
+void ft8_process(char *message, int operation);
+
+// BANDTAG: label every FT8 RX/TX console line with the band it happened on,
+// and print a banner line whenever the dial moves (band/freq history in the log)
+extern int freq_hdr;   // current tuned freq in Hz (sbitx.c)
+static int bandtag_last = 0;
+static int ft8_slot_freq = 0;   //freq when the current rx slot started
+static int ft8_decode_freq = 0; //freq of the slot being decoded/printed
+static const char *band_tag_of(int f){
+	int k = f / 1000;
+	if (k >= 1800  && k <= 2000)  return "160m";
+	if (k >= 3500  && k <= 4000)  return "80m";
+	if (k >= 5250  && k <= 5410)  return "60m";
+	if (k >= 7000  && k <= 7300)  return "40m";
+	if (k >= 10100 && k <= 10150) return "30m";
+	if (k >= 14000 && k <= 14350) return "20m";
+	if (k >= 18068 && k <= 18168) return "17m";
+	if (k >= 21000 && k <= 21450) return "15m";
+	if (k >= 24890 && k <= 24990) return "12m";
+	if (k >= 28000 && k <= 29700) return "10m";
+	return "??m";
+}
+static void bandtag_banner(){
+	if (freq_hdr > 0 && freq_hdr != bandtag_last){
+		char bb[64];
+		sprintf(bb, "--- %s dial %d.%03d MHz ---\n", band_tag_of(freq_hdr),
+			freq_hdr/1000000, (freq_hdr%1000000)/1000);
+		write_console(FONT_LOG, bb);
+		bandtag_last = freq_hdr;
+	}
+}
+static void ft8_log_csv(const char *dir, int fq, int score, int snr, int pitch, int pw10, int vswr10, const char *text){
+	FILE *lf = fopen("/home/pi/sbitx/data/ft8_decodes.csv", "a");
+	if (!lf)
+		return;
+	time_t rt = time_sbitx();
+	struct tm *tt = gmtime(&rt);
+	fprintf(lf, "%04d-%02d-%02d,%02d:%02d:%02d,%s,%s,%d,%d,%d,%d,%d,%d,\"%s\"\n",
+		tt->tm_year+1900, tt->tm_mon+1, tt->tm_mday,
+		tt->tm_hour, tt->tm_min, tt->tm_sec,
+		dir, band_tag_of(fq), fq, score, snr, pitch, pw10, vswr10, text);
+	fclose(lf);
+}
+
+#ifndef FT8_START_QSO
+#define FT8_START_QSO 1
+#endif
+// ---- HUNT: auto-answer CQs; ROBO adds auto band-hopping (see robo_tick in sbitx_gtk.c) ----
+int ft8_hunt_active = 0;              // cached: FT8_AUTO is HUNT or ROBO
+#define HUNT_MAX 512
+static struct { char call[14]; int tries; time_t next_ok;
+	int last_snr, prev_snr, heard; time_t last_heard; char line[80]; } hunt_tab[HUNT_MAX];
+static int hunt_tab_n = 0;
+static int hunt_tab_loaded = 0;
+static char hunt_target[14];          // station we are working right now
+static int hunt_target_seen = 0;      // target decoded in this batch
+static int hunt_target_busy = 0;      // target seen working someone else
+static int hunt_target_miss = 0;      // consecutive batches without hearing target
+static int hunt_target_snr = -99;
+static int hunt_qso_slots = 0;        // watchdog: 15s slots since target last heard
+
+// ---- band preselect + SWR blacklist for auto modes ----
+static time_t swr_bad_until[8];        // per band: no auto TX until this time
+static int band_idx_of(int f){
+	int k = f / 1000;
+	if (k >= 3500 && k <= 4000) return 0;
+	if (k >= 7000 && k <= 7300) return 1;
+	if (k >= 10100 && k <= 10150) return 2;
+	if (k >= 14000 && k <= 14350) return 3;
+	if (k >= 18068 && k <= 18168) return 4;
+	if (k >= 21000 && k <= 21450) return 5;
+	if (k >= 24890 && k <= 24990) return 6;
+	if (k >= 28000 && k <= 29700) return 7;
+	return -1;
+}
+void hunt_swr_bad_set(int f){
+	int i = band_idx_of(f);
+	if (i >= 0)
+		swr_bad_until[i] = time(NULL) + 3600;
+}
+static int hunt_band_listed(int f){
+	static char list[100];
+	static time_t loaded = 0;
+	if (time(NULL) - loaded > 60){
+		loaded = time(NULL);
+		list[0] = 0;
+		FILE *bf = fopen("/home/pi/sbitx/data/robo_bands.txt", "r");
+		if (bf){
+			if (!fgets(list, sizeof(list) - 1, bf))
+				list[0] = 0;
+			fclose(bf);
+		}
+	}
+	if (!list[0] || strstr(list, "all"))
+		return 1;
+	return strstr(list, band_tag_of(f)) != NULL;
+}
+int hunt_band_ok(int f){               // also used by robo_apply
+	int i = band_idx_of(f);
+	if (i < 0)
+		return 0;
+	if (time(NULL) < swr_bad_until[i])
+		return 0;
+	return hunt_band_listed(f);
+}
+
+// ---- pick the clearest TX audio offset from the last decode batch ----
+static int busy_hz[80];
+static int busy_n = 0;
+static time_t busy_ts = 0;
+static void txbest_note(int hz){
+	if (time(NULL) - busy_ts > 20){ busy_n = 0; busy_ts = time(NULL); }
+	if (busy_n < 80)
+		busy_hz[busy_n++] = hz;
+}
+int txbest_pick(){
+	int list[84], n = 0;
+	list[n++] = 250;
+	for (int i = 0; i < busy_n; i++)
+		if (busy_hz[i] > 200 && busy_hz[i] < 3000)
+			list[n++] = busy_hz[i];
+	list[n++] = 2950;
+	for (int i = 1; i < n; i++){
+		int v = list[i], j = i - 1;
+		while (j >= 0 && list[j] > v){ list[j+1] = list[j]; j--; }
+		list[j+1] = v;
+	}
+	int bi = 1, bg = 0;
+	for (int i = 1; i < n; i++)
+		if (list[i] - list[i-1] > bg){ bg = list[i] - list[i-1]; bi = i; }
+	int pick = (list[bi] + list[bi-1]) / 2;
+	if (pick < 300) pick = 300;
+	if (pick > 2900) pick = 2900;
+	return pick;
+}
+
+// console color by message type
+static int hunt_cq_caller(const char *text, char *out);
+static void hunt_note_heard(const char *text);
+int hunt_worked_before(const char *call);
+int hunt_skipped(const char *call);
+static int ft8_line_font(const char *text){
+	if (!strncmp(text, "CQ ", 3)){
+		char hc[16];
+		if (hunt_cq_caller(text, hc) && (hunt_worked_before(hc) || hunt_skipped(hc)))
+			return FONT_FT8_QUEUED; // dim: already worked or skip-listed
+		return FONT_FT8_CQ;
+	}
+	const char *sp = strrchr(text, ' ');
+	const char *last = sp ? sp + 1 : text;
+	if (!strcmp(last, "73") || !strcmp(last, "RR73") || !strcmp(last, "RRR"))
+		return FONT_FT8_73;
+	if (last[0] == '-' || last[0] == '+' ||
+		(last[0] == 'R' && (last[1] == '-' || last[1] == '+')))
+		return FONT_FT8_REPORT;
+	return FONT_FT8_RX;
+}
+
+// ---- TX metering + per-QSO logging ----
+extern int fwdpower, vswr;            // sbitx.c: deciwatts / vswr*10, live during TX
+static int tx_peak_pw10 = 0, tx_peak_vswr10 = 0;
+static int last_tx_pw10 = 0, last_tx_vswr10 = 0;
+
+// longest-prefix country lookup from data/prefixes.csv
+static char pfx_tab[420][2][24];
+static int pfx_n = -1;
+static const char *country_of(const char *call){
+	if (pfx_n < 0){
+		char ln[80];
+		pfx_n = 0;
+		FILE *cf = fopen("/home/pi/sbitx/data/prefixes.csv", "r");
+		if (cf){
+			fgets(ln, sizeof(ln), cf); // header
+			while (pfx_n < 420 && fgets(ln, sizeof(ln), cf)){
+				char *c = strchr(ln, ',');
+				if (!c) continue;
+				*c = 0;
+				char *e = c + 1;
+				e[strcspn(e, "\r\n")] = 0;
+				strncpy(pfx_tab[pfx_n][0], ln, 23);
+				strncpy(pfx_tab[pfx_n][1], e, 23);
+				pfx_n++;
+			}
+			fclose(cf);
+		}
+	}
+	int bi = -1, bl = 0;
+	for (int i = 0; i < pfx_n; i++){
+		int l = strlen(pfx_tab[i][0]);
+		if (l > bl && !strncmp(call, pfx_tab[i][0], l)){ bl = l; bi = i; }
+	}
+	return bi >= 0 ? pfx_tab[bi][1] : "?";
+}
+
+// one row per completed QSO: date,utc,band,dial,call,grid,sent,recv,country,pw10,vswr10
+void ft8_qso_csv(){
+	FILE *qf = fopen("/home/pi/sbitx/data/qso_log.csv", "a");
+	if (!qf)
+		return;
+	time_t rt = time_sbitx();
+	struct tm *tt = gmtime(&rt);
+	const char *call = field_str("CALL");
+	if (strlen(call) < 3){
+		fclose(qf);
+		return;
+	}
+	fprintf(qf, "%04d-%02d-%02d,%02d:%02d:%02d,%s,%d,\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",%d,%d\n",
+		tt->tm_year+1900, tt->tm_mon+1, tt->tm_mday, tt->tm_hour, tt->tm_min, tt->tm_sec,
+		band_tag_of(freq_hdr), freq_hdr, call, field_str("EXCH"), field_str("SENT"),
+		field_str("RECV"), country_of(call), last_tx_pw10, last_tx_vswr10);
+	fclose(qf);
+}
+
+static int hunt_tab_find(const char *call){
+	for (int i = 0; i < hunt_tab_n; i++)
+		if (!strcmp(hunt_tab[i].call, call))
+			return i;
+	return -1;
+}
+
+static int hunt_tab_addslot(const char *call){
+	int i = hunt_tab_find(call);
+	if (i >= 0)
+		return i;
+	if (!call[0] || strlen(call) > 12)
+		return -1;
+	if (hunt_tab_n >= HUNT_MAX){ // forget the oldest half
+		memmove(&hunt_tab[0], &hunt_tab[HUNT_MAX/2], (HUNT_MAX/2) * sizeof(hunt_tab[0]));
+		hunt_tab_n = HUNT_MAX/2;
+	}
+	i = hunt_tab_n++;
+	strcpy(hunt_tab[i].call, call);
+	hunt_tab[i].tries = 0;
+	hunt_tab[i].next_ok = 0;
+	hunt_tab[i].last_snr = hunt_tab[i].prev_snr = -99;
+	hunt_tab[i].heard = 0;
+	hunt_tab[i].last_heard = 0;
+	hunt_tab[i].line[0] = 0;
+	return i;
+}
+
+static void hunt_mark_worked(const char *call){
+	int i = hunt_tab_addslot(call);
+	if (i >= 0)
+		hunt_tab[i].tries = 99; // never call again
+}
+
+// pre-TX check: load stations already in the QSO log so we never call them again
+static void hunt_load_log(){
+	if (hunt_tab_loaded)
+		return;
+	hunt_tab_loaded = 1;
+	FILE *qf = fopen("/home/pi/sbitx/data/qso_log.csv", "r");
+	if (!qf)
+		return;
+	char ln[256];
+	while (fgets(ln, sizeof(ln), qf)){
+		char *p = strchr(ln, '"');       // first quoted field is the callsign
+		if (!p) continue;
+		char *q = strchr(p + 1, '"');
+		if (!q || q - p - 1 > 12 || q == p + 1) continue;
+		*q = 0;
+		hunt_mark_worked(p + 1);
+	}
+	fclose(qf);
+}
+
+// extract the calling station from "CQ [DX/POTA/...] CALL [GRID]": first token with a digit
+static int hunt_cq_caller(const char *text, char *out){
+	char t[64], *tok, *sp;
+	if (strncmp(text, "CQ ", 3) || strchr(text, '<'))
+		return 0;
+	strncpy(t, text, 63); t[63] = 0;
+	tok = strtok_r(t, " ", &sp); // "CQ"
+	while ((tok = strtok_r(NULL, " ", &sp))){
+		int L = strlen(tok);
+		if (strpbrk(tok, "0123456789") && L >= 3 && L <= 12){
+			strcpy(out, tok);
+			return 1;
+		}
+	}
+	return 0;
+}
+
+// hunter response modes: 0 NORMAL, 1 MEDIUM, 2 HYPER (persisted in data/hunt_mode.txt)
+static int hunt_mode_level = -1;
+static void hunt_mode_load(){
+	if (hunt_mode_level >= 0)
+		return;
+	hunt_mode_level = 0;
+	FILE *f = fopen("/home/pi/sbitx/data/hunt_mode.txt", "r");
+	if (f){
+		if (fscanf(f, "%d", &hunt_mode_level) != 1)
+			hunt_mode_level = 0;
+		fclose(f);
+	}
+	if (hunt_mode_level < 0 || hunt_mode_level > 2)
+		hunt_mode_level = 0;
+}
+void hunt_mode_set(int m){
+	hunt_mode_level = (m < 0 || m > 2) ? 0 : m;
+	FILE *f = fopen("/home/pi/sbitx/data/hunt_mode.txt", "w");
+	if (f){ fprintf(f, "%d\n", hunt_mode_level); fclose(f); }
+}
+static int hm_snr_min(){ return hunt_mode_level == 2 ? -24 : hunt_mode_level == 1 ? -21 : -18; }
+static int hm_wd_slots(){ return hunt_mode_level == 2 ? 4 : hunt_mode_level == 1 ? 6 : 10; }
+static int hm_tries(){ return hunt_mode_level == 2 ? 2 : 3; }
+static int hm_backoff(int tries){
+	if (hunt_mode_level == 2)
+		return 30;
+	return (hunt_mode_level == 1 ? 60 : 120) * (1 << (tries - 1));
+}
+int hunt_worked_before(const char *call){
+	hunt_load_log();
+	int i = hunt_tab_find(call);
+	return i >= 0 && hunt_tab[i].tries >= 99;
+}
+
+// prefix skip list (data/hunt_skip.txt, e.g. "VU"): the hunter ignores CQs from
+// these prefixes. Stations calling us directly are still answered (separate path).
+static char hunt_skip[100];
+static time_t hunt_skip_loaded = 0;
+int hunt_skipped(const char *call){
+	if (time(NULL) - hunt_skip_loaded > 60){
+		hunt_skip_loaded = time(NULL);
+		hunt_skip[0] = 0;
+		FILE *f = fopen("/home/pi/sbitx/data/hunt_skip.txt", "r");
+		if (f){
+			if (!fgets(hunt_skip, sizeof(hunt_skip) - 1, f))
+				hunt_skip[0] = 0;
+			fclose(f);
+		}
+	}
+	if (!hunt_skip[0])
+		return 0;
+	char tmp[100], *tok, *sp;
+	strcpy(tmp, hunt_skip);
+	tok = strtok_r(tmp, " \r\n", &sp);
+	while (tok){
+		if (strcmp(tok, "none") && !strncmp(call, tok, strlen(tok)))
+			return 1;
+		tok = strtok_r(NULL, " \r\n", &sp);
+	}
+	return 0;
+}
+
+static int hunt_mode_on(){
+	const char *s = field_str("FT8_AUTO");
+	return s && (!strcmp(s, "HUNT") || !strcmp(s, "ROBO"));
+}
+
+// every decoded line: watch our target (fading? gone with someone else?)
+static void hunt_note_heard(const char *text){
+	char t[64], *to, *from, *sp;
+	if (!hunt_target[0])
+		return;
+	strncpy(t, text, 63); t[63] = 0;
+	to = strtok_r(t, " ", &sp);
+	from = strtok_r(NULL, " ", &sp);
+	if (!to || !from)
+		return;
+	if (!strcmp(from, hunt_target)){
+		hunt_target_seen = 1;
+		if (strcmp(to, "CQ") && strcmp(to, field_str("MYCALLSIGN")))
+			hunt_target_busy = 1;
+	}
+}
+
+// every fresh CQ goes into the queue with its stats
+static void hunt_consider(const char *text, int snr, const char *line, const char *mycall_up){
+	char hc[16];
+	if (!ft8_hunt_active || snr < hm_snr_min())
+		return;
+	if (!hunt_cq_caller(text, hc))
+		return;
+	if (!strcmp(hc, mycall_up) || hunt_skipped(hc))
+		return;
+	hunt_load_log();
+	int hi = hunt_tab_addslot(hc);
+	if (hi < 0 || hunt_tab[hi].tries >= 90) // worked already
+		return;
+	hunt_tab[hi].prev_snr = hunt_tab[hi].heard ? hunt_tab[hi].last_snr : snr;
+	hunt_tab[hi].last_snr = snr;
+	hunt_tab[hi].heard++;
+	hunt_tab[hi].last_heard = time(NULL);
+	strncpy(hunt_tab[hi].line, line, 79);
+	hunt_tab[hi].line[79] = 0;
+}
+
+// best station to call right now: strong, rising, recently heard, not backing off
+static int hunt_queue_best(){
+	time_t now = time(NULL);
+	int best = -1, best_score = -999;
+	for (int i = 0; i < hunt_tab_n; i++){
+		if (hunt_tab[i].tries >= hm_tries() || hunt_tab[i].tries >= 90)
+			continue;
+		if (!hunt_tab[i].line[0] || now < hunt_tab[i].next_ok)
+			continue;
+		if (now - hunt_tab[i].last_heard > 90) // faded out / gone
+			continue;
+		int trend = hunt_tab[i].last_snr - hunt_tab[i].prev_snr;
+		int score = hunt_tab[i].last_snr + (trend > 0 ? 3 : trend < -3 ? -5 : 0);
+		if (score > best_score){ best_score = score; best = i; }
+	}
+	return best;
+}
+
+int hunt_queue_depth(){
+	time_t now = time(NULL);
+	int n = 0;
+	for (int i = 0; i < hunt_tab_n; i++)
+		if (hunt_tab[i].tries < hm_tries() && hunt_tab[i].tries < 90 && hunt_tab[i].line[0]
+			&& now >= hunt_tab[i].next_ok && now - hunt_tab[i].last_heard <= 90)
+			n++;
+	return n;
+}
+
+void hunt_queue_report(){
+	char ln[90];
+	time_t now = time(NULL);
+	int shown = 0;
+	write_console(FONT_LOG, "queue: call snr trend heard tries age\n");
+	for (int i = 0; i < hunt_tab_n && shown < 8; i++){
+		if (!hunt_tab[i].line[0] || hunt_tab[i].tries >= 90)
+			continue;
+		if (now - hunt_tab[i].last_heard > 300)
+			continue;
+		sprintf(ln, "%c%-10s %3d %+3d x%d t%d %lds\n",
+			!strcmp(hunt_tab[i].call, hunt_target) ? '>' : ' ',
+			hunt_tab[i].call, hunt_tab[i].last_snr,
+			hunt_tab[i].last_snr - hunt_tab[i].prev_snr, hunt_tab[i].heard,
+			hunt_tab[i].tries, (long)(now - hunt_tab[i].last_heard));
+		write_console(FONT_LOG, ln);
+		shown++;
+	}
+	if (!shown)
+		write_console(FONT_LOG, "(empty)\n");
+}
+
+static void hunt_start(int hi){
+	char note[110], line[256];
+	hunt_tab[hi].tries++;
+	hunt_tab[hi].next_ok = time(NULL) + hm_backoff(hunt_tab[hi].tries);
+	hunt_qso_slots = 0;
+	hunt_target_seen = hunt_target_busy = hunt_target_miss = 0;
+	strcpy(hunt_target, hunt_tab[hi].call);
+	hunt_target_snr = hunt_tab[hi].last_snr;
+	{	char ps[12]; //answer on the clearest audio offset
+		sprintf(ps, "%d", txbest_pick());
+		field_set("TX_PITCH", ps);
+	}
+	sprintf(note, "HUNT: answering %s (%d dB, try %d/%d, %d more in queue)\n",
+		hunt_tab[hi].call, hunt_tab[hi].last_snr, hunt_tab[hi].tries, hm_tries(),
+		hunt_queue_depth() - 1);
+	write_console(FONT_LOG, note);
+	strcpy(line, hunt_tab[hi].line);
+	ft8_process(line, FT8_START_QSO);
+}
+
+// after each decode batch: never waste a TX slot on a dead target
+static void hunt_pick(){
+	ft8_hunt_active = hunt_mode_on();
+	hunt_mode_load();
+	if (!ft8_hunt_active)
+		return;
+	if (strlen(field_str("CALL"))){
+		if (hunt_target[0]){
+			if (hunt_target_busy){
+				char note[80];
+				sprintf(note, "HUNT: %s went with another station, next!\n", hunt_target);
+				write_console(FONT_LOG, note);
+				ft8_abort();
+				call_wipe();
+				hunt_target[0] = 0;
+			}
+			else if (!hunt_target_seen && ++hunt_target_miss >= 2){
+				int nb = hunt_queue_best();
+				if (nb >= 0 && hunt_tab[nb].last_snr >= hunt_target_snr - 3){
+					char note[100];
+					sprintf(note, "HUNT: %s fading (2 slots quiet), trying %s\n",
+						hunt_target, hunt_tab[nb].call);
+					write_console(FONT_LOG, note);
+					ft8_abort();
+					call_wipe();
+					hunt_target[0] = 0;
+				}
+			}
+		}
+		hunt_target_seen = hunt_target_busy = 0;
+		if (strlen(field_str("CALL")))
+			return;
+	}
+	if (!hunt_band_ok(freq_hdr))
+		return;
+	hunt_load_log();
+	int hi = hunt_queue_best();
+	if (hi >= 0)
+		hunt_start(hi);
+}
 void ft8_interpret(char *received, char *transmit);
 extern void call_wipe();
 
@@ -485,15 +984,21 @@ static int sbitx_ft8_decode(float *signal, int num_samples, bool is_ft8)
            ++num_decoded;
 
 					char buff[1000];
-          sprintf(buff, "%s %3d %+03d %-4.0f ~  %s\n", time_str, 
+          bandtag_banner();
+          sprintf(buff, "%s %s %3d %+03d %-4.0f ~ %s\n", time_str, band_tag_of(ft8_decode_freq ? ft8_decode_freq : freq_hdr), 
 						cand->score, cand->snr, freq_hz, message.text);
+					ft8_log_csv("RX", ft8_decode_freq ? ft8_decode_freq : freq_hdr, cand->score, cand->snr, (int)freq_hz, 0, 0, message.text);
 
+					hunt_note_heard(message.text);
+					txbest_note((int)freq_hz);
 					if (strstr(buff, mycallsign_upper)){
 						write_console(FONT_FT8_REPLY, buff);
 						ft8_process(buff, FT8_CONTINUE_QSO);
 					}
-					else 
-						write_console(FONT_FT8_RX, buff);
+					else {
+						write_console(ft8_line_font(message.text), buff);
+						hunt_consider(message.text, cand->snr, buff, mycallsign_upper);
+					}
 
 	//				save_message('R', cand->score, cand-snr,freq_hz, message.text);
 					n_decodes++;
@@ -535,8 +1040,10 @@ static void ft8_start_tx(int offset_seconds){
 	time_t	rawtime = time_sbitx();
 	struct tm *t = gmtime(&rawtime);
 
-  sprintf(buff, "%02d%02d%02d  TX +00 %04d ~  %s\n", t->tm_hour, t->tm_min, t->tm_sec, ft8_pitch, ft8_tx_text);
+  bandtag_banner();
+  sprintf(buff, "%02d%02d%02d %s TX +00 %04d ~ %s\n", t->tm_hour, t->tm_min, t->tm_sec, band_tag_of(freq_hdr), ft8_pitch, ft8_tx_text);
 	write_console(FONT_FT8_TX, buff);
+	ft8_log_csv("TX", freq_hdr, 0, 0, ft8_pitch, 0, 0, ft8_tx_text);
 
 	ft8_tx_nsamples = sbitx_ft8_encode(ft8_tx_text, ft8_pitch, ft8_tx_buff, false); 
 	ft8_tx_buff_index = offset_seconds * 96000;
@@ -555,7 +1062,8 @@ void ft8_tx(char *message, int freq){
 	strcpy(ft8_tx_text, message);
 
 	ft8_pitch = freq;
-  sprintf(buff, "%02d%02d%02d  TX +00 %04d ~  %s\n", t->tm_hour, t->tm_min, t->tm_sec, ft8_pitch, ft8_tx_text);
+  bandtag_banner();
+  sprintf(buff, "%02d%02d%02d %s TX +00 %04d ~ %s\n", t->tm_hour, t->tm_min, t->tm_sec, band_tag_of(freq_hdr), ft8_pitch, ft8_tx_text);
 	write_console(FONT_FT8_QUEUED, buff);
 
 	//also set the times of transmission
@@ -604,6 +1112,7 @@ void *ft8_thread_function(void *ptr){
 
 		ft8_do_decode = 0;
 		sbitx_ft8_decode(ft8_rx_buffer, ft8_rx_buff_index, true);
+		hunt_pick();
 		//let the next batch begin
 		ft8_rx_buff_index = 0;
 	}
@@ -633,26 +1142,86 @@ void ft8_rx(int32_t *samples, int count){
 		return;
 
 	int slot_second = wallclock % 15;
-	if (slot_second == 0)
+	if (slot_second == 0){
 		ft8_rx_buff_index = 0;
+		ft8_slot_freq = freq_hdr; //the band this slot's audio is captured on
+	}
 
 //	printf("ft8 decoding trigger index %d, slot_second %d\n", ft8_rx_buff_index, slot_second);
 	//we should have atleast 12 seconds of samples to decode
-	if (ft8_rx_buff_index >= 13 * 12000 && slot_second > 13)
+	if (ft8_rx_buff_index >= 13 * 12000 && slot_second > 13){
+		ft8_decode_freq = ft8_slot_freq ? ft8_slot_freq : freq_hdr;
 		ft8_do_decode = 1;
+	}
 }
 
 void ft8_poll(int seconds, int tx_is_on){
 	static int last_second = 0;
+	static int last_wd = -1;
+	ft8_hunt_active = hunt_mode_on();
+	if (!tx_is_on && (seconds % 15) == 0 && seconds != last_wd){
+		last_wd = seconds;
+		if (ft8_hunt_active && strlen(field_str("CALL"))){
+			if (++hunt_qso_slots > hm_wd_slots()){
+				write_console(FONT_LOG, "HUNT: no reply, moving on\n");
+				ft8_abort();
+				call_wipe();
+				hunt_qso_slots = 0;
+			}
+		}
+	}
 
 	//if we are already transmitting, we continue 
 	//until we run out of ft8 sampels
 	if (tx_is_on){
+		static time_t swr_bad_since = 0;
+		if (fwdpower > tx_peak_pw10){ tx_peak_pw10 = fwdpower; tx_peak_vswr10 = vswr; }
+		// live SWR probe: the first seconds of every auto TX are the test.
+		// sustained SWR > 1.9 kills the transmission NOW, not at its end.
+		if (ft8_hunt_active && fwdpower > 20){ // >2W out: bridge reading is valid
+			if (vswr > 19){
+				if (!swr_bad_since)
+					swr_bad_since = time(NULL);
+				else if (time(NULL) - swr_bad_since >= 2){
+					char sn[90];
+					sprintf(sn, "SWR %d.%d high on %s - TX ABORTED, band blocked 1h\n",
+						vswr/10, vswr%10, band_tag_of(freq_hdr));
+					write_console(FONT_LOG, sn);
+					hunt_swr_bad_set(freq_hdr);
+					{ extern int robo_swr_flee; robo_swr_flee = 1; }
+					swr_bad_since = 0;
+					tx_peak_pw10 = 0;
+					ft8_abort();
+					tx_off();
+					call_wipe();
+					return;
+				}
+			}
+			else
+				swr_bad_since = 0;
+		}
+		else if (!vswr || vswr <= 19)
+			swr_bad_since = 0;
 		//tx_off should not abort repeats from modem_poll, when called from here
 		int ft8_repeat_save = ft8_repeat;
 		if (ft8_tx_nsamples == 0){
 			tx_off();
 			ft8_repeat = ft8_repeat_save;
+			if (tx_peak_pw10 > 0){ //log the measured peak of this transmission
+				last_tx_pw10 = tx_peak_pw10;
+				last_tx_vswr10 = tx_peak_vswr10;
+				ft8_log_csv("TXEND", freq_hdr, 0, 0, ft8_pitch, last_tx_pw10, last_tx_vswr10, ft8_tx_text);
+				tx_peak_pw10 = 0;
+				if (ft8_hunt_active && last_tx_vswr10 > 19){ //SWR safety for auto modes
+					char sn[80];
+					sprintf(sn, "SWR %d.%d high! auto TX stopped on %s for 1 hour\n",
+						last_tx_vswr10/10, last_tx_vswr10%10, band_tag_of(freq_hdr));
+					write_console(FONT_LOG, sn);
+					hunt_swr_bad_set(freq_hdr);
+					ft8_abort();
+					call_wipe();
+				}
+			}
 		}
 		return;
 	}
@@ -702,6 +1271,13 @@ int ft8_message_tokenize(char *message){
 
 	p = strtok(NULL, " \r\n");
 	if (!p) return -1;
+	//skip the BANDTAG column ("40m"/"160m"/"??m") so old positional parsing still works
+	{	int L = strlen(p);
+		if (L >= 2 && L <= 4 && p[L-1] == 'm' && (isdigit((unsigned char)p[0]) || p[0] == '?')){
+			p = strtok(NULL, " \r\n");
+			if (!p) return -1;
+		}
+	}
 	confidence_score = atoi(p);
 
 	p = strtok(NULL, " \r\n");
@@ -826,7 +1402,7 @@ void ft8_process(char *message, int operation){
 	report_received = field_str("RECV");
 	mycall = field_str("MYCALLSIGN");
 	tx_pitch = field_int("TX_PITCH");
-	if (!strcmp(field_str("FT8_AUTO"), "ON"))
+	if (strcmp(field_str("FT8_AUTO"), "OFF"))
 		auto_respond = 1;
 
 	//use only the first 4 letters of the grid
@@ -850,9 +1426,12 @@ void ft8_process(char *message, int operation){
 		printf("FT8: Not a message for %s\n", mycall);
 		return;
 	}
+	hunt_qso_slots = 0;
 
 
 	if (!strcmp(m3, "73")){
+		hunt_target[0] = 0;
+		hunt_mark_worked(m2);
 		ft8_abort();
 		ft8_repeat = 0;
 		return;
@@ -864,6 +1443,8 @@ void ft8_process(char *message, int operation){
 	if (!strcmp(m3, "RR73") || !strcmp(m3, "RRR")){
 		sprintf(reply_message, "%s %s 73", m2, mycall);	
 		ft8_tx(reply_message, tx_pitch); 
+		hunt_target[0] = 0;
+		hunt_mark_worked(m2);
 		enter_qso();
 		call_wipe();
 		ft8_repeat = 1;

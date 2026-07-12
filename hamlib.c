@@ -22,6 +22,7 @@ char incoming_data[MAX_DATA];
 int incoming_ptr;
 
 void  hamlib_tx(int tx_on);
+extern void remote_execute(char *cmd); /* thread-safe: queued to GUI thread */
 
 //copied from gqrx on github
 static char dump_state_response[] =
@@ -114,7 +115,7 @@ void hamlib_set_freq(char *f){
     freq = atoi(f);
   send_response("RPRT 0\n");
 	sprintf(cmd, "freq %d", freq);
-	cmd_exec(cmd);
+	remote_execute(cmd); /* was cmd_exec: GTK calls from this thread corrupt/crash the UI */
 //	set_freq(freq);
 }
 	

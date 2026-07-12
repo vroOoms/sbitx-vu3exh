@@ -281,6 +281,16 @@
 <!-- end of panadapter -->
 <!- wsjtx specific controls -->
 		<div id="FT8_ui" class="sbitx-panel mode-panel">
+			<div id="ft8-answer-bar">
+				<button class="logger-button" id="ans-cq">Answer CQ</button>
+				<button class="logger-button" id="ans-caller">Answer Caller</button>
+				<select id="hunt-mode" class="sbitx-selection" title="hunter aggressiveness">
+					<option value="">hunter mode...</option>
+					<option value="huntmode normal">Normal</option>
+					<option value="huntmode medium">Medium</option>
+					<option value="huntmode hyper">Hyper</option>
+				</select>
+			</div>
 			<div id="wsjtx-activity" class="sbitx-list-container" >
 				Band Activity
 				<ol size="10" class="sbitx-list-box">
@@ -296,6 +306,8 @@
 				<div class="sbitxv3-control">
 					<div class="sbitxv3-label">AUTO</div>
 					<select class="sbitxv3-selection sbitx-selection" id="FT8_AUTO">
+						<option value="ROBO">ROBO</option>
+						<option value="HUNT">HUNT</option>
 						<option value="ON">ON</option>
 						<option value="OFF">OFF</option>
 					</select>
@@ -393,6 +405,11 @@
 			</span>
 			<div id="console_window">
 			</div>
+			<div id="cmd-helper" style="margin:4px 0">
+				<select id="cmd-select" class="sbitx-selection" style="max-width:45%"></select>
+				<button class="logger-button" id="cmd-run">Run</button>
+				<div id="cmd-desc" style="color:#888;font-size:11px;margin-top:2px"></div>
+			</div>
 			<div id="command_bar">
 				<input type="text" class="sbitx-text-input"  id="text_in" />
 			</div>
@@ -435,14 +452,16 @@
 		><button class="sbitxv3-btn macro-btn" id="F8">F8</button
 		><button class="sbitxv3-btn macro-btn" id="F9">F9</button
 		><button class="sbitxv3-btn macro-btn" id="F10">F10</button>
-		<button class="sbitxv3-btn" id="console-open">CMD</button
+		<button class="sbitxv3-btn" id="keyb-toggle">KEYB</button
+		><button class="sbitxv3-btn" id="logs-open">LOG</button
+		><button class="sbitxv3-btn" id="console-open">CMD</button
 		><button class="sbitxv3-btn" id="telnet-open">TEL</button
 		><button class="sbitxv3-btn" id="recorder-open">REC</button
 		><button class="sbitxv3-btn" id="settings-open">SET</button>
 		<input type="text" class="sbitx-text-input sbitx-text-field" 
 			id="TEXT" placeholder="TEXT\CMD" size="20" />
 		</div><!-- end of more_keys -->
-		<table id="keybd" class="sbitx-keystroke" width="100%">
+		<table id="keybd" class="sbitx-keystroke" width="100%" style="display:none">
 			<tr>
 			<td>Q</td><td>W</td><td>E</td><td>R</td><td>T</td><td>Y</td><td>U</td>
 			<td>I</td><td>O</td><td>P</td><td>@</td><td>1</td><td>2</td><td>3</td><td colspan="2">DEL</td>
@@ -909,6 +928,20 @@ function spectrum_update(update){
 
 	//write the status
 	ctx.fillText(status, w.width/2 - ctx.measureText(status).width/2, 14); 
+	//frequency scale in kHz, a tick every 2 kHz like the radio screen
+	try {
+		var dial = parseInt(el(el("VFO").value == "B" ? "VFOB" : "VFOA").value);
+		if (dial > 0){
+			ctx.fillStyle = "#ff6";
+			ctx.font = "11px Sans";
+			var half_hz = (w.width / 2) / hz_per_pixel;
+			for (var f = Math.ceil((dial - half_hz)/2000)*2000; f < dial + half_hz; f += 2000){
+				var px = w.width/2 + (f - dial) * hz_per_pixel;
+				ctx.fillText((f/1000).toFixed(0), px - 12, 27);
+			}
+			ctx.fillStyle = "white";
+		}
+	} catch(e){}
 
 	//show spots!
 	let freq = parseInt(el("FREQ").value)/1000;
@@ -1146,7 +1179,8 @@ function sbitx_onscreen_key(event){
 }
 
 function show_keyboard(){
-	$("#keybd").show();
+	if (typeof kbd_enabled === "undefined" || kbd_enabled)
+		$("#keybd").show();
 }
 /* Filter Panel */
 
@@ -1348,9 +1382,11 @@ var ft8_tx_message = "";
 function FT8_stylize_message(text, style){
 	//tokenize the message
 	var token_list = text.match(/\S+/g);
-	if (token_list.length < 8 || token_list[4] != '~' || token_list.length > 9){
+	if (token_list && token_list.length > 1 && /^(\d{1,3}|\?\?)m$/.test(token_list[1]))
+		token_list.splice(1,1); //drop the BANDTAG column
+	if (!token_list || token_list.length < 8 || token_list[4] != '~' || token_list.length > 9){
 		log("FT8_process_message: error parsing [" + text + "]");
-		return;
+		return "sbitx-list-item";
 	}
 
 	var index = 1;
@@ -1363,16 +1399,26 @@ function FT8_stylize_message(text, style){
 	var mycallsign = $("#MYCALLSIGN").val().toUpperCase();
 	var mygrid = $("#MYGRID").val().substring(0,4).toUpperCase();
 
+	var extra = "";
+	var m3 = token_list.length > 7 ? token_list[7] : "";
+	if (/^(RRR|RR73|73)$/.test(m3)) extra = " wsjtx-73";
+	else if (/^R?[-+]\d+$/.test(m3)) extra = " wsjtx-report";
 	if(style == 'Q')
 		return "sbitx-list-item wsjtx-message-queued";
 	if (contact_callsign == mycallsign)
 		return "sbitx-list-item wsjtx-message-for-me";
 	else if (sender_callsign == mycallsign)
-		return "sbitx-list-item wsjtx-mycallsign";
-	else if (sender_callsign == "CQ")
+		return "sbitx-list-item wsjtx-mycallsign" + extra;
+	else if (contact_callsign == "CQ" || sender_callsign == "CQ"){
+		var cqc = cq_caller_of(token_list.slice(0));
+		if (cqc && worked_calls[cqc])
+			return "sbitx-list-item wsjtx-cq-worked";
+		if (cqc && skip_prefixes.some(function(p){ return cqc.indexOf(p) == 0; }))
+			return "sbitx-list-item wsjtx-cq-skip";
 		return "sbitx-list-item wsjtx-cq-in-message";
+	}
 	else 
-		return "sbitx-list-item";
+		return "sbitx-list-item" + extra;
 }
 
 function FT8_list_append(list_id, text, style){
@@ -1419,8 +1465,10 @@ function FT8_message_chosen(event){
 		return;
 	//tokenize the message
 	var token_list = message_text.match(/\S+/g);
-	if (token_list.length < 7 || token_list[4] != '~' || token_list.length > 9){
-		log("FT8_process_message: error parsing [" + text + "]");
+	if (token_list && token_list.length > 1 && /^(\d{1,3}|\?\?)m$/.test(token_list[1]))
+		token_list.splice(1,1); //drop the BANDTAG column
+	if (!token_list || token_list.length < 7 || token_list[4] != '~' || token_list.length > 9){
+		log("FT8_process_message: error parsing [" + message_text + "]");
 		return;
 	}
 
@@ -1448,14 +1496,49 @@ function FT8_message_chosen(event){
 
 function FT8_new_message(text, style){
 	log("ft8:" + text + ":" + style);
-	var words = text.split(' ');
+	var words = text.match(/\S+/g) || [];
+	if (words.length > 1 && /^(\d{1,3}|\?\?)m$/.test(words[1]))
+		words.splice(1,1); //drop the BANDTAG column
 	FT8_list_append("wsjtx-activity", text, style) ;
 	var mycallsign = $("#MYCALLSIGN").val().toUpperCase();
-	if (words[4] == $("#FT8-rx-freq").val() || text.search(mycallsign) >= 0)
+	if (words[3] == $("#FT8-rx-freq").val() || text.search(mycallsign) >= 0)
 		FT8_list_append("wsjtx-rx", text, style);
 }
 
 // setup the html for wsjtx 
+function FT8_norm_tokens(t){
+	var w = t.match(/\S+/g) || [];
+	if (w.length > 1 && /^(\d{1,3}|\?\?)m$/.test(w[1]))
+		w.splice(1,1);
+	return w;
+}
+function FT8_answer_cq(){
+	var items = el("wsjtx-activity").children[0].children;
+	var mycall = $("#MYCALLSIGN").val().toUpperCase();
+	for (var i = items.length - 1; i >= 0; i--){
+		var t = items[i].id;
+		var w = FT8_norm_tokens(t);
+		if (w.length >= 7 && w[4] == '~' && w[5] == 'CQ' && t.indexOf(mycall) < 0){
+			websocket_send("FT8 " + t);
+			FT8_list_append("wsjtx-rx", t, "RX");
+			return;
+		}
+	}
+	alert("No CQ in the list yet");
+}
+function FT8_answer_caller(){
+	var items = el("wsjtx-rx").children[0].children;
+	var mycall = $("#MYCALLSIGN").val().toUpperCase();
+	for (var i = items.length - 1; i >= 0; i--){
+		var t = items[i].id;
+		var w = FT8_norm_tokens(t);
+		if (w.length >= 8 && w[4] == '~' && w[5] == mycall && w[1] != 'TX'){
+			websocket_send("FT8 " + t);
+			return;
+		}
+	}
+	alert("Nobody has called us yet");
+}
 function FT8_open(){
 	el("FT8_ui").style.display = "block";
 }
@@ -2176,6 +2259,70 @@ $(".macro-btn").on("click", logger_trigger_macro);
 $("#REF").on("change", draw_meters);
 $("#MODE").on("change", mode_changed);
 $("#console-open").on("click", show_console_panel);
+$("#logs-open").on("click", function(){ window.open("/logs.html", "_blank"); });
+var kbd_enabled = false;
+$("#keyb-toggle").on("click", function(){ kbd_enabled = !kbd_enabled; $("#keybd").toggle(kbd_enabled); });
+var worked_calls = {};
+var skip_prefixes = [];
+function load_worked(){
+	fetch("/data/qso_log.csv?t=" + Date.now()).then(function(r){ return r.ok ? r.text() : ""; }).then(function(t){
+		t.trim().split("\n").forEach(function(ln){
+			var m = ln.match(/"([A-Z0-9\/]{3,})"/);
+			if (m) worked_calls[m[1]] = 1;
+		});
+	}).catch(function(){});
+	fetch("/data/hunt_skip.txt?t=" + Date.now()).then(function(r){ return r.ok ? r.text() : ""; }).then(function(t){
+		t = t.trim();
+		skip_prefixes = (t && t != "none") ? t.split(/\s+/) : [];
+	}).catch(function(){});
+}
+load_worked();
+setInterval(load_worked, 60000);
+function cq_caller_of(tokens){
+	for (var i = 6; i < tokens.length && i < 9; i++)
+		if (/\d/.test(tokens[i]) && tokens[i].length >= 3) return tokens[i];
+	return null;
+}
+var CMD_LIST = [
+ ["", "pick a command...", ""],
+ ["ftbest", "Best FT8 band", "Checks PSK Reporter for live FT8 activity near you, reports spots per band"],
+ ["txbest", "Clearest TX tone", "Moves your TX audio offset to the least crowded slot in the passband"],
+ ["robobands 20m 17m 15m", "Limit auto bands", "HUNT/ROBO will only use the listed bands. Use: robobands all - to allow every band"],
+ ["huntmode normal", "Hunter mode", "normal / medium / hyper - how aggressively the hunter answers (SNR floor, retries, patience)"],
+ ["huntskip VU", "Skip prefixes", "Hunter ignores CQs from these prefixes (still answers if they call YOU). huntskip none - clears"],
+ ["session antenna=EFHW 49:1", "Session note", "Adds a note to the session log; antenna=... also updates the PSK Reporter antenna info"],
+ ["span 25K", "Spectrum span", "Sets the waterfall span: 25K, 10K, 6K or 2.5K"],
+ ["bmask", "Birdie mask status", "Reports how many spurs are masked or being learned"],
+ ["screen off", "Screen off", "Blanks the radio screen. Touching the screen wakes it"],
+ ["screen 40", "Brightness", "Sets screen brightness 5..100 percent"],
+ ["silent", "Silent mode", "Audio 0, sidetone 0 and screen off - for unattended operation"],
+ ["wake", "Wake up", "Restores audio, sidetone and screen"],
+ ["freq 14074", "Tune", "Tunes the radio (kHz or Hz)"],
+ ["mode FT8", "Mode", "Switches mode: FT8, USB, LSB, CW, CWR, AM"],
+ ["qrz ", "QRZ lookup", "Looks up a callsign on qrz.com (device browser)"],
+ ["abort", "Abort TX", "Stops any transmission immediately"],
+ ["clear", "Clear console", "Wipes the decode console"]
+];
+(function(){
+	var sel = el("cmd-select");
+	CMD_LIST.forEach(function(c, i){
+		var o = document.createElement("option");
+		o.value = i; o.textContent = c[0] ? (c[0] + "  -  " + c[1]) : c[1];
+		sel.appendChild(o);
+	});
+	sel.addEventListener("change", function(){
+		var c = CMD_LIST[sel.value] || CMD_LIST[0];
+		el("cmd-desc").textContent = c[2];
+		el("text_in").value = c[0];
+	});
+	el("cmd-run").addEventListener("click", function(){
+		var v = el("text_in").value;
+		if (v){ websocket_send(v); el("text_in").value = ""; el("cmd-desc").textContent = "sent: " + v; }
+	});
+})();
+$("#ans-cq").on("click", FT8_answer_cq);
+$("#ans-caller").on("click", FT8_answer_caller);
+$("#hunt-mode").on("change", function(){ if (this.value){ websocket_send(this.value); this.selectedIndex = 0; } });
 $("#telnet-open").on("click", show_telnet_panel);
 $("#keyboard-open").on("click", show_keyboard);
 $("#MACRO").on("change", logger_get_macro_file);

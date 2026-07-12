@@ -5,6 +5,7 @@
 #include <math.h>
 #include <complex.h>
 #include <fftw3.h>
+#include "rnnoise.h"
 #include <unistd.h>
 #include <wiringPi.h>
 #include <wiringSerial.h>
@@ -47,6 +48,14 @@ int sbitx_version = SBITX_V2;
 int fwdpower, vswr;
 float fft_bins[MAX_BINS]; // spectrum ampltiudes  
 int spectrum_plot[MAX_BINS];
+// BMASK: self-learning birdie mask - scores per-bin persistence; bins that stay
+// hot across QSYs are internal spurs and get painted at the noise floor.
+// Kill-switch: echo 0 > data/bmask.txt  (user request 2026-07-03)
+static unsigned char bmask_score[MAX_BINS];
+static int bmask_enable = -1;   /* -1 = read file on first frame */
+static int bmask_last_freq = 0;
+static int bmask_frame = 0;
+static int bmask_nf = -50;
 fftw_complex *fft_spectrum;
 fftw_plan plan_spectrum;
 float spectrum_window[MAX_BINS];
@@ -73,6 +82,15 @@ int si570_xtal = 0;
 static double volume 	= 100.0;
 static int tx_drive = 40;
 static int rx_gain = 100;
+int rx_nr = 0;                 /* noise reduction 0..100 (0=off) */
+int rx_anf = 0;                /* auto-notch 0/1 */
+int rx_rnnoise = 0;            /* AI (RNNoise) NR 0/1 */
+static DenoiseState *rnn_st = NULL;
+#define RNN_Q 4096
+static float rnn_acc[480]; static int rnn_acc_n = 0;
+static float rnn_q[RNN_Q]; static int rnn_qh = 0, rnn_qt = 0, rnn_primed = 0;
+static double rnn_scale = 65536.0;
+double nr_noise[MAX_BINS];     /* per-bin noise floor estimate */
 static int rx_vol = 100;
 static int tx_gain = 100;
 static int tx_compress = 0;
@@ -179,6 +197,7 @@ void fft_init(){
 	}
 
 	make_hann_window(spectrum_window, MAX_BINS);
+	rnn_st = rnnoise_create(NULL);
 }
 
 void fft_reset_m_bins(){
@@ -238,6 +257,81 @@ void spectrum_update(){
 		int y = power2dB(cnrmf(fft_bins[i])); 
 		spectrum_plot[i] = y;
 	}
+
+	// BMASK learning + masking
+	if (bmask_enable == -1){
+		bmask_enable = 1;
+		FILE *bf = fopen("/home/pi/sbitx/data/bmask.txt", "r");
+		if (bf){ int v; if (fscanf(bf, "%d", &v) == 1) bmask_enable = v ? 1 : 0; fclose(bf); }
+		if (bmask_enable){ // birdies survive restarts: reload the learned map
+			FILE *sf = fopen("/home/pi/sbitx/data/bmask_scores.dat", "r");
+			if (sf){
+				int bi, bs;
+				while (fscanf(sf, "%d %d", &bi, &bs) == 2)
+					if (bi >= 0 && bi < MAX_BINS && bs > 0)
+						bmask_score[bi] = bs > 255 ? 255 : bs;
+				fclose(sf);
+			}
+		}
+	}
+	if (bmask_enable){
+		bmask_frame++;
+		if ((bmask_frame & 7) == 0){
+			long s = 0; int n = 0, i;
+			for (i = 1276; i <= 1796; i++){ s += spectrum_plot[i]; n++; }
+			int mean = (int)(s/n);
+			long s2 = 0; int n2 = 0;
+			for (i = 1276; i <= 1796; i++) if (spectrum_plot[i] <= mean){ s2 += spectrum_plot[i]; n2++; }
+			bmask_nf = n2 ? (int)(s2/n2) : mean;
+			int moved = (bmask_last_freq && (int)freq_hdr != bmask_last_freq);
+			bmask_last_freq = (int)freq_hdr;
+			for (i = 1276; i <= 1796; i++){
+				int hot = spectrum_plot[i] > bmask_nf + 8;
+				int warm = spectrum_plot[i] > bmask_nf + 4;
+				int sc = bmask_score[i];
+				if (moved) sc += hot ? 80 : (warm ? 0 : -80);
+				else if (hot) sc += 2;
+				else if (!warm) sc -= (sc >= 160) ? 1 : 3; // masked bins fade slowly, hold while warm
+				if (sc < 0) sc = 0;
+				if (sc > 255) sc = 255;
+				bmask_score[i] = (unsigned char)sc;
+			}
+		}
+		if ((bmask_frame & 4095) == 0){ // persist the learned map across restarts
+			FILE *sf = fopen("/home/pi/sbitx/data/bmask_scores.dat", "w");
+			if (sf){
+				for (int i = 1276; i <= 1796; i++)
+					if (bmask_score[i] >= 60)
+						fprintf(sf, "%d %d\n", i, bmask_score[i]);
+				fclose(sf);
+			}
+		}
+		for (int i = 1277; i <= 1795; i++){
+			if (bmask_score[i] >= 200){
+				spectrum_plot[i] = bmask_nf;
+				// also flatten the birdie's skirt bins (not scored, just painted)
+				if (bmask_score[i-1] < 200 && spectrum_plot[i-1] > bmask_nf + 4) spectrum_plot[i-1] = bmask_nf + 2;
+				if (bmask_score[i+1] < 200 && spectrum_plot[i+1] > bmask_nf + 4) spectrum_plot[i+1] = bmask_nf + 2;
+			}
+		}
+	}
+}
+
+// BMASK introspection: per-bin dump for tuning; summary counts read by cmd_exec "bmask"
+int bmask_masked_count = 0;
+int bmask_rising_count = 0;
+void bmask_dump(){
+	bmask_masked_count = 0;
+	bmask_rising_count = 0;
+	FILE *pf = fopen("/tmp/bmask_dump.txt", "w");
+	for (int i = 1276; i <= 1796; i++){
+		if (bmask_score[i] >= 200) bmask_masked_count++;
+		else if (bmask_score[i] >= 100) bmask_rising_count++;
+		if (pf)
+			fprintf(pf, "%d %d %d %d\n", i, ((i - 1536) * 46875) / 1000, bmask_score[i], spectrum_plot[i]);
+	}
+	if (pf)
+		fclose(pf);
 }
 /*
 static int create_mcast_socket(){
@@ -646,6 +740,38 @@ void rx_am(int32_t *input_rx,  int32_t *input_mic,
 	for (i = 0; i < MAX_BINS; i++)
 		r->fft_freq[i] *= r->filter->fir_coeff[i];
 
+	/* STEP 6B: spectral-subtraction noise reduction (rx_nr 0..100, 0=off) */
+	if (rx_nr > 0){
+		double aggr = 1.0 + (rx_nr / 20.0);
+		for (i = 0; i < MAX_BINS; i++){
+			double mag = cabs(r->fft_freq[i]);
+			if (nr_noise[i] == 0.0) nr_noise[i] = mag;
+			if (mag < nr_noise[i]) nr_noise[i] = mag;
+			else nr_noise[i] = 0.9995*nr_noise[i] + 0.0005*mag;
+			double g = (mag - aggr*nr_noise[i]) / (mag + 1e-12);
+			if (g < 0.06) g = 0.06;
+			if (g > 1.0) g = 1.0;
+			r->fft_freq[i] *= g;
+		}
+	}
+
+	/* Auto-Notch (ANF): null narrow carriers/heterodynes (voice modes only) */
+	if (rx_anf && (r->mode==MODE_USB || r->mode==MODE_LSB || r->mode==MODE_AM)){
+		int k;
+		for (i = 8; i < MAX_BINS - 8; i++){
+			double mag = cabs(r->fft_freq[i]);
+			if (mag <= 0.0) continue;
+			double nb = 0.0;
+			for (k = 3; k <= 8; k++) nb += cabs(r->fft_freq[i-k]) + cabs(r->fft_freq[i+k]);
+			nb /= 12.0;
+			if (nb > 0.0 && mag > 4.0*nb){
+				r->fft_freq[i]   *= 0.08;
+				r->fft_freq[i-1] *= 0.30;
+				r->fft_freq[i+1] *= 0.30;
+			}
+		}
+	}
+
 	//STEP 7: convert back to time domain	
 	my_fftw_execute(r->plan_rev);
 	//STEP 8 : AGC
@@ -754,6 +880,38 @@ void rx_linear(int32_t *input_rx,  int32_t *input_mic,
 	for (i = 0; i < MAX_BINS; i++)
 		r->fft_freq[i] *= r->filter->fir_coeff[i];
 
+	/* STEP 6B: spectral-subtraction noise reduction (rx_nr 0..100, 0=off) */
+	if (rx_nr > 0){
+		double aggr = 1.0 + (rx_nr / 20.0);
+		for (i = 0; i < MAX_BINS; i++){
+			double mag = cabs(r->fft_freq[i]);
+			if (nr_noise[i] == 0.0) nr_noise[i] = mag;
+			if (mag < nr_noise[i]) nr_noise[i] = mag;
+			else nr_noise[i] = 0.9995*nr_noise[i] + 0.0005*mag;
+			double g = (mag - aggr*nr_noise[i]) / (mag + 1e-12);
+			if (g < 0.06) g = 0.06;
+			if (g > 1.0) g = 1.0;
+			r->fft_freq[i] *= g;
+		}
+	}
+
+	/* Auto-Notch (ANF): null narrow carriers/heterodynes (voice modes only) */
+	if (rx_anf && (r->mode==MODE_USB || r->mode==MODE_LSB || r->mode==MODE_AM)){
+		int k;
+		for (i = 8; i < MAX_BINS - 8; i++){
+			double mag = cabs(r->fft_freq[i]);
+			if (mag <= 0.0) continue;
+			double nb = 0.0;
+			for (k = 3; k <= 8; k++) nb += cabs(r->fft_freq[i-k]) + cabs(r->fft_freq[i+k]);
+			nb /= 12.0;
+			if (nb > 0.0 && mag > 4.0*nb){
+				r->fft_freq[i]   *= 0.08;
+				r->fft_freq[i-1] *= 0.30;
+				r->fft_freq[i+1] *= 0.30;
+			}
+		}
+	}
+
 	//STEP 7: convert back to time domain	
 	my_fftw_execute(r->plan_rev);
 
@@ -780,6 +938,23 @@ void rx_linear(int32_t *input_rx,  int32_t *input_mic,
 				output_speaker[i] = sample;
 				output_tx[i] = 0;
 			}
+
+		/* AI Noise Reduction (RNNoise): 96k->48k decimate, 480-frame, upsample. voice only, default off */
+		if (rx_rnnoise && rnn_st && (r->mode==MODE_USB || r->mode==MODE_LSB || r->mode==MODE_AM)){
+			int k, m, nt;
+			for (k = 0; k < MAX_BINS/2; k += 2){
+				rnn_acc[rnn_acc_n++] = (float)(output_speaker[k] / rnn_scale);
+				if (rnn_acc_n >= 480){
+					float den[480]; rnnoise_process_frame(rnn_st, den, rnn_acc);
+					for (m = 0; m < 480; m++){ nt=(rnn_qt+1)%RNN_Q; if (nt!=rnn_qh){ rnn_q[rnn_qt]=den[m]; rnn_qt=nt; } }
+					rnn_acc_n = 0;
+				}
+			}
+			{ int qf=(rnn_qt-rnn_qh+RNN_Q)%RNN_Q; if (!rnn_primed && qf>=960) rnn_primed=1; }
+			for (k = 0; k < MAX_BINS/2; k += 2){
+				if (rnn_primed && rnn_qh!=rnn_qt){ int32_t sv=(int32_t)(rnn_q[rnn_qh]*rnn_scale); rnn_qh=(rnn_qh+1)%RNN_Q; output_speaker[k]=sv; output_speaker[k+1]=sv; }
+			}
+		}
 
 		//push the samples to the remote audio queue, decimated to 16000 samples/sec
 		for (i = 0; i < MAX_BINS/2; i += 6)
@@ -1403,6 +1578,20 @@ void sdr_request(char *request, char *response){
 	strncpy(cmd, request, n);
 	cmd[n] = 0;
 	strcpy(value, request+n+1);
+
+	if (!strcmp(cmd, "rx_nr")){ rx_nr = atoi(value); if(response) strcpy(response, "ok"); return; }
+
+	if (!strcmp(cmd, "rx_anf")){ rx_anf = (!strcmp(value,"ON")||atoi(value))?1:0; if(response) strcpy(response, "ok"); return; }
+
+	if (!strcmp(cmd, "rx_rnnoise")){
+		rx_rnnoise = (!strcmp(value,"ON")||atoi(value))?1:0;
+		if (rx_rnnoise){
+			// RNNTUNE: pick up live scale from file so tuning needs no rebuild
+			FILE *sf = fopen("/home/pi/sbitx/data/rnn_scale.txt","r");
+			if (sf){ double v; if (fscanf(sf, "%lf", &v)==1 && v>0) rnn_scale=v; fclose(sf); }
+			rnn_qh = rnn_qt = 0; rnn_primed = 0; rnn_acc_n = 0;
+		}
+		if(response) strcpy(response, "ok"); return; }
 
 	if (!strcmp(cmd, "stat:tx")){
 		if (in_tx)
