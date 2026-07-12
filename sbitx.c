@@ -56,6 +56,11 @@ static int bmask_enable = -1;   /* -1 = read file on first frame */
 static int bmask_last_freq = 0;
 static int bmask_frame = 0;
 static int bmask_nf = -50;
+// windowed-minimum birdie test: a real FT8 signal must fall to the noise
+// floor in the 2s gap between slots; a birdie never does. If a bin's
+// minimum over the last 9-18s stays above floor+4, it is a birdie.
+static int bmin_cur[MAX_BINS], bmin_prev[MAX_BINS];
+static time_t bmin_rolled = 0;
 fftw_complex *fft_spectrum;
 fftw_plan plan_spectrum;
 float spectrum_window[MAX_BINS];
@@ -263,6 +268,8 @@ void spectrum_update(){
 		bmask_enable = 1;
 		FILE *bf = fopen("/home/pi/sbitx/data/bmask.txt", "r");
 		if (bf){ int v; if (fscanf(bf, "%d", &v) == 1) bmask_enable = v ? 1 : 0; fclose(bf); }
+		for (int i = 0; i < MAX_BINS; i++){ bmin_prev[i] = -999; bmin_cur[i] = 999; }
+		bmin_rolled = time(NULL);
 		if (bmask_enable){ // birdies survive restarts: reload the learned map
 			FILE *sf = fopen("/home/pi/sbitx/data/bmask_scores.dat", "r");
 			if (sf){
@@ -276,6 +283,15 @@ void spectrum_update(){
 	}
 	if (bmask_enable){
 		bmask_frame++;
+		for (int i = 1276; i <= 1796; i++)
+			if (spectrum_plot[i] < bmin_cur[i])
+				bmin_cur[i] = spectrum_plot[i];
+		if (time(NULL) - bmin_rolled >= 9){ // roll the half-window
+			bmin_rolled = time(NULL);
+			memcpy(bmin_prev, bmin_cur, sizeof(bmin_prev));
+			for (int i = 1276; i <= 1796; i++)
+				bmin_cur[i] = 999;
+		}
 		if ((bmask_frame & 7) == 0){
 			long s = 0; int n = 0, i;
 			for (i = 1276; i <= 1796; i++){ s += spectrum_plot[i]; n++; }
@@ -285,6 +301,10 @@ void spectrum_update(){
 			bmask_nf = n2 ? (int)(s2/n2) : mean;
 			int moved = (bmask_last_freq && (int)freq_hdr != bmask_last_freq);
 			bmask_last_freq = (int)freq_hdr;
+			if (moved){ // new band: restart the continuity window
+				for (int i = 1276; i <= 1796; i++){ bmin_prev[i] = -999; bmin_cur[i] = 999; }
+				bmin_rolled = time(NULL);
+			}
 			for (i = 1276; i <= 1796; i++){
 				int hot = spectrum_plot[i] > bmask_nf + 8;
 				int warm = spectrum_plot[i] > bmask_nf + 4;
@@ -307,7 +327,8 @@ void spectrum_update(){
 			}
 		}
 		for (int i = 1277; i <= 1795; i++){
-			if (bmask_score[i] >= 200){
+			int bh = bmin_prev[i] < bmin_cur[i] ? bmin_prev[i] : bmin_cur[i];
+			if (bmask_score[i] >= 200 || (bh > bmask_nf + 4 && bh < 200)){
 				spectrum_plot[i] = bmask_nf;
 				// also flatten the birdie's skirt bins (not scored, just painted)
 				if (bmask_score[i-1] < 200 && spectrum_plot[i-1] > bmask_nf + 4) spectrum_plot[i-1] = bmask_nf + 2;
@@ -328,7 +349,7 @@ void bmask_dump(){
 		if (bmask_score[i] >= 200) bmask_masked_count++;
 		else if (bmask_score[i] >= 100) bmask_rising_count++;
 		if (pf)
-			fprintf(pf, "%d %d %d %d\n", i, ((i - 1536) * 46875) / 1000, bmask_score[i], spectrum_plot[i]);
+			fprintf(pf, "%d %d %d %d %d\n", i, ((i - 1536) * 46875) / 1000, bmask_score[i], spectrum_plot[i], bmin_prev[i] < bmin_cur[i] ? bmin_prev[i] : bmin_cur[i]);
 	}
 	if (pf)
 		fclose(pf);

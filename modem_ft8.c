@@ -411,6 +411,42 @@ static void hunt_load_log(){
 		hunt_mark_worked(p + 1);
 	}
 	fclose(qf);
+	// restore today's attempt counters (tries/backoff survive a restart,
+	// reset automatically on the next UTC day)
+	{	FILE *df = fopen("/home/pi/sbitx/data/hunt_day.csv", "r");
+		if (df){
+			char ln[64], today[16];
+			time_t rt = time(NULL);
+			struct tm *tt = gmtime(&rt);
+			sprintf(today, "%04d-%02d-%02d", tt->tm_year+1900, tt->tm_mon+1, tt->tm_mday);
+			if (fgets(ln, sizeof(ln), df) && !strncmp(ln, today, 10)){
+				while (fgets(ln, sizeof(ln), df)){
+					char c[14]; int tr; long no;
+					if (sscanf(ln, "%13[^,],%d,%ld", c, &tr, &no) == 3){
+						int i = hunt_tab_addslot(c);
+						if (i >= 0 && hunt_tab[i].tries < 90){
+							hunt_tab[i].tries = tr;
+							hunt_tab[i].next_ok = (time_t)no;
+						}
+					}
+				}
+			}
+			fclose(df);
+		}
+	}
+}
+
+static void hunt_day_save(){
+	FILE *f = fopen("/home/pi/sbitx/data/hunt_day.csv", "w");
+	if (!f)
+		return;
+	time_t rt = time(NULL);
+	struct tm *tt = gmtime(&rt);
+	fprintf(f, "%04d-%02d-%02d\n", tt->tm_year+1900, tt->tm_mon+1, tt->tm_mday);
+	for (int i = 0; i < hunt_tab_n; i++)
+		if (hunt_tab[i].tries > 0 && hunt_tab[i].tries < 90)
+			fprintf(f, "%s,%d,%ld\n", hunt_tab[i].call, hunt_tab[i].tries, (long)hunt_tab[i].next_ok);
+	fclose(f);
 }
 
 // does this look like a real callsign? base = prefix + digit(s) + 1-4 letter
@@ -632,8 +668,10 @@ void hunt_skip_current(){
 		return;
 	}
 	int i = hunt_tab_find(hunt_target);
-	if (i >= 0)
-		hunt_tab[i].tries = 50; // not again this session
+	if (i >= 0){
+		hunt_tab[i].tries = 50; // not again today
+		hunt_day_save();
+	}
 	sprintf(note, "HUNT: skipping %s for this session\n", hunt_target);
 	write_console(FONT_LOG, note);
 	hunt_target[0] = 0;
@@ -667,6 +705,7 @@ static void hunt_start(int hi){
 	char note[110], line[256];
 	hunt_tab[hi].tries++;
 	hunt_tab[hi].next_ok = time(NULL) + hm_backoff(hunt_tab[hi].tries);
+	hunt_day_save();
 	hunt_qso_slots = 0;
 	hunt_target_seen = hunt_target_busy = hunt_target_miss = 0;
 	hunt_got_reply = 0;
