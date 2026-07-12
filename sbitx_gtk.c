@@ -5045,6 +5045,10 @@ void cmd_exec(char *cmd){
 		set_radio_mode(args);
 		update_field(get_field("r1:mode"));
 	}
+	else if (!strcmp(exec, "ignored")){
+		extern void hunt_ignored_report();
+		hunt_ignored_report();
+	}
 	else if (!strcmp(exec, "queue")){
 		extern void hunt_queue_report();
 		hunt_queue_report();

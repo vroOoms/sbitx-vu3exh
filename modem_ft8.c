@@ -97,6 +97,114 @@ static int hunt_target_seen = 0;      // target decoded in this batch
 static int hunt_target_busy = 0;      // target seen working someone else
 static int hunt_target_miss = 0;      // consecutive batches without hearing target
 static int hunt_target_snr = -99;
+static int hunt_got_reply = 0;        // target replied to US during this attempt
+
+// ---- persistent ignore list: stations that never answer our replies ----
+// data/hunt_ignore.csv: CALL,fails,last_fail_epoch. 3 fails => hunter skips
+// their CQs, but re-tests with one probe attempt every 24h. A reply clears it.
+// Stations calling US directly are always answered (separate path).
+#define IGN_MAX 128
+#define IGN_FAILS 3
+#define IGN_RETEST 86400
+static struct { char call[14]; int fails; time_t last; } ign_tab[IGN_MAX];
+static int ign_n = 0, ign_loaded = 0;
+
+static int ign_find(const char *call){
+	for (int i = 0; i < ign_n; i++)
+		if (!strcmp(ign_tab[i].call, call))
+			return i;
+	return -1;
+}
+
+static void ign_load(){
+	if (ign_loaded)
+		return;
+	ign_loaded = 1;
+	FILE *f = fopen("/home/pi/sbitx/data/hunt_ignore.csv", "r");
+	if (!f)
+		return;
+	char ln[64];
+	while (ign_n < IGN_MAX && fgets(ln, sizeof(ln), f)){
+		char c[14]; int fl; long ls;
+		if (sscanf(ln, "%13[^,],%d,%ld", c, &fl, &ls) == 3){
+			strcpy(ign_tab[ign_n].call, c);
+			ign_tab[ign_n].fails = fl;
+			ign_tab[ign_n].last = (time_t)ls;
+			ign_n++;
+		}
+	}
+	fclose(f);
+}
+
+static void ign_save(){
+	FILE *f = fopen("/home/pi/sbitx/data/hunt_ignore.csv", "w");
+	if (!f)
+		return;
+	for (int i = 0; i < ign_n; i++)
+		if (ign_tab[i].fails > 0)
+			fprintf(f, "%s,%d,%ld\n", ign_tab[i].call, ign_tab[i].fails, (long)ign_tab[i].last);
+	fclose(f);
+}
+
+// blocked = ignoring us and not yet due for the 24h probe
+static int ign_blocked(const char *call){
+	ign_load();
+	int i = ign_find(call);
+	if (i < 0 || ign_tab[i].fails < IGN_FAILS)
+		return 0;
+	return (time(NULL) - ign_tab[i].last) < IGN_RETEST;
+}
+
+static void ign_fail(const char *call){
+	char note[110];
+	ign_load();
+	int i = ign_find(call);
+	if (i < 0){
+		if (ign_n >= IGN_MAX){ // forget the oldest half
+			memmove(&ign_tab[0], &ign_tab[IGN_MAX/2], (IGN_MAX/2) * sizeof(ign_tab[0]));
+			ign_n = IGN_MAX/2;
+		}
+		i = ign_n++;
+		strncpy(ign_tab[i].call, call, 13);
+		ign_tab[i].call[13] = 0;
+		ign_tab[i].fails = 0;
+	}
+	ign_tab[i].fails++;
+	ign_tab[i].last = time(NULL);
+	ign_save();
+	if (ign_tab[i].fails == IGN_FAILS){
+		sprintf(note, "HUNT: %s ignored us %d times - skipping their CQs (re-test in 24h)\n",
+			call, ign_tab[i].fails);
+		write_console(FONT_LOG, note);
+	}
+}
+
+static void ign_clear(const char *call){
+	ign_load();
+	int i = ign_find(call);
+	if (i >= 0 && ign_tab[i].fails){
+		ign_tab[i].fails = 0;
+		ign_save();
+	}
+}
+
+void hunt_ignored_report(){
+	char ln[90];
+	time_t now = time(NULL);
+	int shown = 0;
+	ign_load();
+	write_console(FONT_LOG, "ignoring-us list (call fails hours-ago):\n");
+	for (int i = 0; i < ign_n && shown < 10; i++){
+		if (ign_tab[i].fails < IGN_FAILS)
+			continue;
+		sprintf(ln, " %-10s x%d %.1fh\n", ign_tab[i].call, ign_tab[i].fails,
+			(now - ign_tab[i].last) / 3600.0);
+		write_console(FONT_LOG, ln);
+		shown++;
+	}
+	if (!shown)
+		write_console(FONT_LOG, "(nobody blacklisted)\n");
+}
 static int hunt_qso_slots = 0;        // watchdog: 15s slots since target last heard
 
 // ---- band preselect + SWR blacklist for auto modes ----
@@ -413,7 +521,7 @@ static void hunt_consider(const char *text, int snr, const char *line, const cha
 		return;
 	if (!hunt_cq_caller(text, hc))
 		return;
-	if (!strcmp(hc, mycall_up) || hunt_skipped(hc))
+	if (!strcmp(hc, mycall_up) || hunt_skipped(hc) || ign_blocked(hc))
 		return;
 	hunt_load_log();
 	int hi = hunt_tab_addslot(hc);
@@ -437,6 +545,8 @@ static int hunt_queue_best(){
 		if (!hunt_tab[i].line[0] || now < hunt_tab[i].next_ok)
 			continue;
 		if (now - hunt_tab[i].last_heard > 90) // faded out / gone
+			continue;
+		if (ign_blocked(hunt_tab[i].call))
 			continue;
 		int trend = hunt_tab[i].last_snr - hunt_tab[i].prev_snr;
 		int score = hunt_tab[i].last_snr + (trend > 0 ? 3 : trend < -3 ? -5 : 0);
@@ -483,6 +593,16 @@ static void hunt_start(int hi){
 	hunt_tab[hi].next_ok = time(NULL) + hm_backoff(hunt_tab[hi].tries);
 	hunt_qso_slots = 0;
 	hunt_target_seen = hunt_target_busy = hunt_target_miss = 0;
+	hunt_got_reply = 0;
+	ign_load();
+	{	int gi = ign_find(hunt_tab[hi].call);
+		if (gi >= 0 && ign_tab[gi].fails >= IGN_FAILS){
+			char pn[90];
+			sprintf(pn, "HUNT: re-testing %s (ignored us %d times)\n",
+				hunt_tab[hi].call, ign_tab[gi].fails);
+			write_console(FONT_LOG, pn);
+		}
+	}
 	strcpy(hunt_target, hunt_tab[hi].call);
 	hunt_target_snr = hunt_tab[hi].last_snr;
 	{	char ps[12]; //answer on the clearest audio offset
@@ -509,6 +629,8 @@ static void hunt_pick(){
 				char note[80];
 				sprintf(note, "HUNT: %s went with another station, next!\n", hunt_target);
 				write_console(FONT_LOG, note);
+				if (!hunt_got_reply)
+					ign_fail(hunt_target);
 				ft8_abort();
 				call_wipe();
 				hunt_target[0] = 0;
@@ -1164,6 +1286,9 @@ void ft8_poll(int seconds, int tx_is_on){
 		if (ft8_hunt_active && strlen(field_str("CALL"))){
 			if (++hunt_qso_slots > hm_wd_slots()){
 				write_console(FONT_LOG, "HUNT: no reply, moving on\n");
+				if (hunt_target[0] && !hunt_got_reply)
+					ign_fail(hunt_target);
+				hunt_target[0] = 0;
 				ft8_abort();
 				call_wipe();
 				hunt_qso_slots = 0;
@@ -1427,10 +1552,13 @@ void ft8_process(char *message, int operation){
 		return;
 	}
 	hunt_qso_slots = 0;
+	if (hunt_target[0] && !strcmp(m2, hunt_target))
+		hunt_got_reply = 1;
 
 
 	if (!strcmp(m3, "73")){
 		hunt_target[0] = 0;
+		ign_clear(m2);
 		hunt_mark_worked(m2);
 		ft8_abort();
 		ft8_repeat = 0;
@@ -1444,6 +1572,7 @@ void ft8_process(char *message, int operation){
 		sprintf(reply_message, "%s %s 73", m2, mycall);	
 		ft8_tx(reply_message, tx_pitch); 
 		hunt_target[0] = 0;
+		ign_clear(m2);
 		hunt_mark_worked(m2);
 		enter_qso();
 		call_wipe();
