@@ -17,8 +17,10 @@ The `AUTO` field (FT8 screen / web dropdown) has four settings. Each level
 includes everything above it.
 
 ### OFF — fully manual
-Nothing is transmitted unless you tap a decode and press an F-key
-(F2 Call, F3 Reply, F5 73, ...). Tap a CQ line to answer it.
+Nothing is transmitted unless you start it yourself: tap a CQ line to answer
+it, or use the web UI's **Answer CQ / Answer Caller** buttons. (A USB
+keyboard's F-keys still send the classic macros — F2 Call, F3 Reply,
+F5 73, ... — the on-screen F-key row is gone, see below.)
 
 ### ON — answer people who call you
 If someone transmits `VU3EXH <THEIRCALL> ...`, the radio replies and runs the
@@ -113,6 +115,18 @@ to answer.
 
 ## 5. Commands
 
+**FT8 command buttons** — on the FT8 screen the old on-screen F1–F8 row is
+replaced by five buttons:
+
+| Button | Action |
+|---|---|
+| `3D WF` | Toggle 3D ↔ classic waterfall |
+| `SILENT` | Mute audio + sidetone and blank the screen (touch to wake) |
+| `MENU` | Print the command list in the console |
+| `SKIP` | Abort the current hunter target, bar it for today |
+| `QUEUE` | Show the stations waiting to be answered |
+
+
 Pick from the web `CMD` dropdown (each command shows a description), or type
 on the device keyboard **with a leading backslash**: `\ftbest`, `\skip`,
 `\queue`... (without the backslash, typed text is treated as message text;
@@ -130,6 +144,7 @@ the web CMD panel needs no backslash):
 | `robobands 20m 17m` / `all` | Bands HUNT/ROBO may use |
 | `session antenna=EFHW 49:1` | Session note (antenna= also updates PSK Reporter info) |
 | `span 25K/10K/6K/2.5K` | Waterfall span |
+| `wf` | Toggle 3D / classic waterfall (persists) |
 | `bmask` | Birdie-mask status |
 | `screen off / on / 5..100` | Blank screen (touch wakes) / brightness % |
 | `silent` / `wake` | Audio 0 + sidetone 0 + screen off / restore |

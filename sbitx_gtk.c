@@ -460,6 +460,7 @@ int do_kbd(struct field *f, cairo_t *gfx, int event, int a, int b, int c);
 int do_toggle_kbd(struct field *f, cairo_t *gfx, int event, int a, int b, int c);
 int do_mouse_move(struct field *f, cairo_t *gfx, int event, int a, int b, int c);
 int do_macro(struct field *f, cairo_t *gfx, int event, int a, int b, int c);
+int do_cmdbtn(struct field *f, cairo_t *gfx, int event, int a, int b, int c);
 int do_record(struct field *f, cairo_t *gfx, int event, int a, int b, int c);
 int do_bandwidth(struct field *f, cairo_t *gfx, int event, int a, int b, int c);
 
@@ -554,7 +555,12 @@ struct field main_controls[] = {
 	{"#enter_qso", NULL, 290, 50, 40, 40, "SAVE", 1, "", FIELD_BUTTON, FONT_FIELD_VALUE, 
 		"", 0,0,0,COMMON_CONTROL},
 	{"#wipe", NULL, 330, 50, 40, 40, "WIPE", 1, "", FIELD_BUTTON, FONT_FIELD_VALUE,"", 0,0,0,COMMON_CONTROL}, 
-	{"#mfqrz", NULL, 370, 50, 40, 40, "QRZ", 1, "", FIELD_BUTTON, FONT_FIELD_VALUE,"", 0,0,0,COMMON_CONTROL}, 
+	{"#mfqrz", NULL, 370, 50, 40, 40, "QRZ", 1, "", FIELD_BUTTON, FONT_FIELD_VALUE,"", 0,0,0,COMMON_CONTROL},
+	{"#cbtn_wf", do_cmdbtn, 1000, -2000, 80, 45, "3D WF", 1, "", FIELD_BUTTON, FONT_FIELD_VALUE,"", 0,0,0,FT8_CONTROL},
+	{"#cbtn_sil", do_cmdbtn, 1000, -2000, 80, 45, "SILENT", 1, "", FIELD_BUTTON, FONT_FIELD_VALUE,"", 0,0,0,FT8_CONTROL},
+	{"#cbtn_menu", do_cmdbtn, 1000, -2000, 80, 45, "MENU", 1, "", FIELD_BUTTON, FONT_FIELD_VALUE,"", 0,0,0,FT8_CONTROL},
+	{"#cbtn_skip", do_cmdbtn, 1000, -2000, 80, 45, "SKIP", 1, "", FIELD_BUTTON, FONT_FIELD_VALUE,"", 0,0,0,FT8_CONTROL},
+	{"#cbtn_q", do_cmdbtn, 1000, -2000, 75, 45, "QUEUE", 1, "", FIELD_BUTTON, FONT_FIELD_VALUE,"", 0,0,0,FT8_CONTROL},
 	{"#logbook", NULL, 410, 50, 40, 40, "LOG", 1, "", FIELD_BUTTON, FONT_FIELD_VALUE,"", 0,0,0,COMMON_CONTROL}, 
 	{"#text_in", do_text, 5, 70, 285, 20, "TEXT", 70, "text box", FIELD_TEXT, FONT_LOG, 
 		"nothing valuable", 0,128,0,COMMON_CONTROL},
@@ -1677,8 +1683,8 @@ void draw_tx_meters(struct field *f, cairo_t *gfx){
 }
 
 // ---- 3D waterfall: perspective ridgelines, newest sweep at the front ----
-#define WF3_ROWS 42
-#define WF3_PTS 200
+#define WF3_ROWS 32
+#define WF3_PTS 160
 static unsigned char wf3_hist[WF3_ROWS][WF3_PTS];
 static int wf3_head = 0;
 static int wf3_mode = -1;   // -1 = read data/wf_mode.txt on first draw
@@ -1716,7 +1722,11 @@ static void wf3_ramp(int v, double bright, double *r, double *g, double *b){
 	*r = R * bright; *g = G * bright; *b = B * bright;
 }
 
-static void draw_waterfall_3d(struct field *f, cairo_t *gfx){
+static cairo_surface_t *wf3_surf = NULL;
+static int wf3_sw = 0, wf3_sh = 0;
+static int wf3_last_render = 0;
+
+static void wf3_render(struct field *f){
 	// capture this sweep into the history ring
 	for (int p = 0; p < WF3_PTS; p++){
 		int i = (p * f->width) / WF3_PTS;
@@ -1727,52 +1737,71 @@ static void draw_waterfall_3d(struct field *f, cairo_t *gfx){
 	}
 	wf3_head = (wf3_head + 1) % WF3_ROWS;
 
-	cairo_save(gfx);
-	cairo_rectangle(gfx, f->x, f->y, f->width, f->height);
-	cairo_clip(gfx);
-	fill_rect(gfx, f->x, f->y, f->width, f->height, COLOR_BACKGROUND);
-	cairo_set_line_width(gfx, 1);
+	cairo_t *cg = cairo_create(wf3_surf);
+	cairo_set_source_rgb(cg, 0, 0, 0);
+	cairo_paint(cg);
+	cairo_set_line_width(cg, 1);
 
 	for (int k = 0; k < WF3_ROWS; k++){
 		unsigned char *row = wf3_hist[(wf3_head + k) % WF3_ROWS];
-		double t = (double)k / (WF3_ROWS - 1);   // 0 = far/oldest, 1 = front/newest
+		double t = (double)k / (WF3_ROWS - 1);
 		double inset = 26.0 * (1.0 - t);
-		double usable = f->width - 2 * inset;
-		double ybase = f->y + 10 + t * (f->height - 14);
-		double hmax = (f->height * 0.30) * (0.5 + 0.5 * t);
-		// occlude what lies behind this ridge
-		cairo_move_to(gfx, f->x + inset, ybase - (row[0] * hmax) / 100.0);
+		double usable = wf3_sw - 2 * inset;
+		double ybase = 10 + t * (wf3_sh - 14);
+		double hmax = (wf3_sh * 0.30) * (0.5 + 0.5 * t);
+		cairo_move_to(cg, inset, ybase - (row[0] * hmax) / 100.0);
 		for (int p = 1; p < WF3_PTS; p++)
-			cairo_line_to(gfx, f->x + inset + (p * usable) / (WF3_PTS - 1),
+			cairo_line_to(cg, inset + (p * usable) / (WF3_PTS - 1),
 				ybase - (row[p] * hmax) / 100.0);
-		cairo_line_to(gfx, f->x + inset + usable, ybase + 1);
-		cairo_line_to(gfx, f->x + inset, ybase + 1);
-		cairo_close_path(gfx);
-		cairo_set_source_rgb(gfx, 0, 0, 0);
-		cairo_fill(gfx);
-		// the ridge itself, fading into the distance
+		cairo_line_to(cg, inset + usable, ybase + 1);
+		cairo_line_to(cg, inset, ybase + 1);
+		cairo_close_path(cg);
+		cairo_set_source_rgb(cg, 0, 0, 0);
+		cairo_fill(cg);
 		double br = 0.35 + 0.65 * t;
-		cairo_set_source_rgb(gfx, 0.10 * br, 0.75 * br, 0.85 * br);
-		cairo_move_to(gfx, f->x + inset, ybase - (row[0] * hmax) / 100.0);
+		cairo_set_source_rgb(cg, 0.10 * br, 0.75 * br, 0.85 * br);
+		cairo_move_to(cg, inset, ybase - (row[0] * hmax) / 100.0);
 		for (int p = 1; p < WF3_PTS; p++)
-			cairo_line_to(gfx, f->x + inset + (p * usable) / (WF3_PTS - 1),
+			cairo_line_to(cg, inset + (p * usable) / (WF3_PTS - 1),
 				ybase - (row[p] * hmax) / 100.0);
-		cairo_stroke(gfx);
-		// strong signals glow in their true palette colour
+		cairo_stroke(cg);
 		for (int p = 1; p < WF3_PTS; p++){
-			if (row[p] > 45){
+			if (row[p] > 48){
 				double r2, g2, b2;
 				wf3_ramp(row[p], br, &r2, &g2, &b2);
-				cairo_set_source_rgb(gfx, r2, g2, b2);
-				cairo_move_to(gfx, f->x + inset + ((p - 1) * usable) / (WF3_PTS - 1),
+				cairo_set_source_rgb(cg, r2, g2, b2);
+				cairo_move_to(cg, inset + ((p - 1) * usable) / (WF3_PTS - 1),
 					ybase - (row[p - 1] * hmax) / 100.0);
-				cairo_line_to(gfx, f->x + inset + (p * usable) / (WF3_PTS - 1),
+				cairo_line_to(cg, inset + (p * usable) / (WF3_PTS - 1),
 					ybase - (row[p] * hmax) / 100.0);
-				cairo_stroke(gfx);
+				cairo_stroke(cg);
 			}
 		}
 	}
-	cairo_restore(gfx);
+	cairo_destroy(cg);
+}
+
+// the scene renders to an offscreen surface at most ~7x/s; screen redraws
+// (control changes etc.) just blit the cache, so the UI never stutters
+static void draw_waterfall_3d(struct field *f, cairo_t *gfx){
+	int now = millis();
+	int need = 0;
+	if (!wf3_surf || wf3_sw != f->width || wf3_sh != f->height){
+		if (wf3_surf)
+			cairo_surface_destroy(wf3_surf);
+		wf3_sw = f->width;
+		wf3_sh = f->height;
+		wf3_surf = cairo_image_surface_create(CAIRO_FORMAT_RGB24, wf3_sw, wf3_sh);
+		need = 1;
+	}
+	if (now - wf3_last_render >= 150){
+		wf3_last_render = now;
+		need = 1;
+	}
+	if (need)
+		wf3_render(f);
+	cairo_set_source_surface(gfx, wf3_surf, f->x, f->y);
+	cairo_paint(gfx);
 }
 
 void draw_waterfall(struct field *f, cairo_t *gfx){
@@ -2247,14 +2276,19 @@ static void layout_ui(){
 			field_move("SPECTRUM", 360, y1, x2-365, 100);
 			field_move("WATERFALL", 360, y1+100, x2-365, y2-y1-155);
 			field_move("ESC", 5, y2-47, 40, 45);
-			field_move("F1", 50, y2-47, 50, 45);
-			field_move("F2", 100, y2-47, 50, 45);
-			field_move("F3", 150, y2-47, 50, 45);
-			field_move("F4", 200, y2-47, 50, 45);
-			field_move("F5", 250, y2-47, 50, 45);
-			field_move("F6", 300, y2-47, 50, 45);
-			field_move("F7", 350, y2-47, 50, 45);
-			field_move("F8", 400, y2-47, 45, 45);
+			field_move("F1", 50, -2000, 50, 45);
+			field_move("F2", 100, -2000, 50, 45);
+			field_move("F3", 150, -2000, 50, 45);
+			field_move("F4", 200, -2000, 50, 45);
+			field_move("F5", 250, -2000, 50, 45);
+			field_move("F6", 300, -2000, 50, 45);
+			field_move("F7", 350, -2000, 50, 45);
+			field_move("F8", 400, -2000, 45, 45);
+			field_move("3D WF", 50, y2-47, 80, 45);
+			field_move("SILENT", 130, y2-47, 80, 45);
+			field_move("MENU", 210, y2-47, 80, 45);
+			field_move("SKIP", 290, y2-47, 80, 45);
+			field_move("QUEUE", 370, y2-47, 75, 45);
 			field_move("FT8_REPEAT", 450, y2-47, 50, 45);
 			field_move("FT8_TX1ST", 500, y2-47, 50, 45);
 			field_move("FT8_AUTO", 550, y2-47, 50, 45);
@@ -3027,6 +3061,23 @@ int do_tuning(struct field *f, cairo_t *gfx, int event, int a, int b, int c){
 			return 1; 
 	}
 	return 0;	
+}
+
+int do_cmdbtn(struct field *f, cairo_t *gfx, int event, int a, int b, int c){
+	if (event == GDK_BUTTON_PRESS){
+		if (!strcmp(f->label, "3D WF"))
+			cmd_exec("wf");
+		else if (!strcmp(f->label, "SILENT"))
+			cmd_exec("silent");
+		else if (!strcmp(f->label, "MENU"))
+			cmd_exec("menu");
+		else if (!strcmp(f->label, "SKIP"))
+			cmd_exec("skip");
+		else if (!strcmp(f->label, "QUEUE"))
+			cmd_exec("queue");
+		return 1;
+	}
+	return 0;
 }
 
 int do_kbd(struct field *f, cairo_t *gfx, int event, int a, int b, int c){
