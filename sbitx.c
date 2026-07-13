@@ -328,11 +328,18 @@ void spectrum_update(){
 		}
 		for (int i = 1277; i <= 1795; i++){
 			int bh = bmin_prev[i] < bmin_cur[i] ? bmin_prev[i] : bmin_cur[i];
-			if (bmask_score[i] >= 200 || (bh > bmask_nf + 4 && bh < 200)){
+			if (bmask_score[i] >= 200){
 				spectrum_plot[i] = bmask_nf;
 				// also flatten the birdie's skirt bins (not scored, just painted)
 				if (bmask_score[i-1] < 200 && spectrum_plot[i-1] > bmask_nf + 4) spectrum_plot[i-1] = bmask_nf + 2;
 				if (bmask_score[i+1] < 200 && spectrum_plot[i+1] > bmask_nf + 4) spectrum_plot[i+1] = bmask_nf + 2;
+			}
+			else if (bh > bmask_nf + 2 && bh < 200){
+				// whiten: subtract each bin's persistent baseline (its windowed
+				// minimum). Wide RFI plateaus and weak spurs sink to the floor;
+				// real FT8 bursts touch the floor every slot gap, so they keep
+				// their full contrast.
+				spectrum_plot[i] -= (bh - bmask_nf - 2);
 			}
 		}
 	}

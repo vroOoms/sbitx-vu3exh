@@ -1197,6 +1197,30 @@ int do_console(struct field *f, cairo_t *gfx, int event, int a, int b, int c){
 					cons_dragging = 0;
 					return 1;
 				}
+				// CMD menu lines: first tap selects (highlight), tapping the
+				// SAME line again within 15s runs it - mis-taps are harmless
+				if (!strncmp(console_stream[console_selected_line].text, "CMD: ", 5)){
+					static int cmd_armed = -1;
+					static time_t cmd_armed_at = 0;
+					char cbuf[64];
+					strncpy(cbuf, console_stream[console_selected_line].text + 5, 63);
+					cbuf[63] = 0;
+					char *cdash = strstr(cbuf, " - ");
+					if (cdash)
+						*cdash = 0;
+					if (console_selected_line == cmd_armed && time(NULL) - cmd_armed_at <= 15){
+						cmd_armed = -1;
+						write_console(FONT_LOG, "> ");
+						write_console(FONT_LOG, cbuf);
+						write_console(FONT_LOG, "\n");
+						cmd_exec(cbuf);
+					}
+					else {
+						cmd_armed = console_selected_line;
+						cmd_armed_at = time(NULL);
+					}
+					return 1;
+				}
 				// SCANJUMP: tap a scan-report line ("7154.3 SSB (-2)") to tune to it
 				int skhz = 0, sfrac = 0;
 				if (sscanf(console_stream[console_selected_line].text, "%d.%d", &skhz, &sfrac) == 2
@@ -4303,6 +4327,7 @@ gboolean ui_tick(gpointer gook){
 				get_field("#mycallsign")->value, get_field("#mygrid")->value);
 			fclose(sf);
 		}
+		write_console(FONT_LOG, "CMD: menu - tap here for commands\n");
 	}
 	if (ticks % 100 == 0){ scan_tick(); robo_tick(); }
 	if (ticks % 10 == 0) wf_auto_ref();
@@ -5044,6 +5069,22 @@ void cmd_exec(char *cmd){
 	else if (!strcmp(exec, "mode") || !strcmp(exec, "m") || !strcmp(exec, "MODE")){
 		set_radio_mode(args);
 		update_field(get_field("r1:mode"));
+	}
+	else if (!strcmp(exec, "menu")){
+		write_console(FONT_LOG,
+			"tap a line to run it:\n"
+			"CMD: queue - stations waiting\n"
+			"CMD: ignored - who ignores us\n"
+			"CMD: skip - drop current target\n"
+			"CMD: ftbest - best FT8 band now\n"
+			"CMD: txbest - clearest TX tone\n"
+			"CMD: huntmode normal - careful\n"
+			"CMD: huntmode hyper - fast\n"
+			"CMD: bmask - birdie mask status\n"
+			"CMD: span 25K - full waterfall\n"
+			"CMD: screen off - blank screen\n"
+			"CMD: silent - mute all + screen\n"
+			"CMD: wake - restore all\n");
 	}
 	else if (!strcmp(exec, "skip")){
 		extern void hunt_skip_current();
