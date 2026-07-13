@@ -2245,6 +2245,14 @@ static void layout_ui(){
 	//locate the kbd to the right corner
 	field_move("KBD", screen_width - 47, screen_height-47, 45, 45);
 
+	//page-specific COMMON toggles: park them, the mode branch re-places its own
+	field_move("ANF", 5, -2000, 55, 45);
+	field_move("SCAN", 5, -2000, 55, 45);
+	field_move("AINR", 5, -2000, 55, 45);
+	field_move("WIDE", 5, -2000, 55, 45);
+	field_move("OPT", 5, -2000, 55, 45);
+	field_move("SMART", 5, -2000, 55, 45);
+
 	//now, move the main radio controls to the right
 	field_move("FREQ", x2-205, 0, 180, 40);
 	field_move("AUDIO", x2-45, 5, 40, 40);
@@ -2268,6 +2276,11 @@ static void layout_ui(){
 	else
 		keyboard_display(0);
 	
+	if (!strcmp(field_str("KBD"), "ON"))
+		field_move("MENU", 5, -2000, 55, 45);
+	else
+		field_move("MENU", screen_width - 104, screen_height-47, 55, 45);
+
 	int m_id = mode_id(field_str("MODE"));
 	int button_width = 100;
 	switch(m_id){
@@ -2284,16 +2297,15 @@ static void layout_ui(){
 			field_move("F6", 300, -2000, 50, 45);
 			field_move("F7", 350, -2000, 50, 45);
 			field_move("F8", 400, -2000, 45, 45);
-			field_move("3D WF", 50, y2-47, 80, 45);
-			field_move("SILENT", 130, y2-47, 80, 45);
-			field_move("MENU", 210, y2-47, 80, 45);
-			field_move("SKIP", 290, y2-47, 80, 45);
-			field_move("QUEUE", 370, y2-47, 75, 45);
-			field_move("FT8_REPEAT", 450, y2-47, 50, 45);
-			field_move("FT8_TX1ST", 500, y2-47, 50, 45);
-			field_move("FT8_AUTO", 550, y2-47, 50, 45);
-			field_move("TX_PITCH", 600, y2-47, 73, 45);
-			field_move("SIDETONE", 675, y2-47, 73, 45);
+			field_move("3D WF", 50, y2-47, 85, 45);
+			field_move("SILENT", 137, y2-47, 85, 45);
+			field_move("SKIP", 224, y2-47, 85, 45);
+			field_move("QUEUE", 311, y2-47, 80, 45);
+			field_move("FT8_REPEAT", 395, y2-47, 50, 45);
+			field_move("FT8_TX1ST", 447, y2-47, 50, 45);
+			field_move("FT8_AUTO", 499, y2-47, 50, 45);
+			field_move("TX_PITCH", 551, y2-47, 70, 45);
+			field_move("SIDETONE", 623, y2-47, 70, 45);
 		break;
 		case MODE_CW:
 		case MODE_CWR:
@@ -2317,6 +2329,7 @@ static void layout_ui(){
 			field_move("CW_DELAY", 545, y2-47,50, 45);
 			field_move("CW_INPUT", 595, y2-47, 70 , 45);
 			field_move("SIDETONE", 665, y2-47, 70, 45);
+			field_move("MENU", 5, -2000, 55, 45);
 			break;
 		case MODE_USB:
 		case MODE_LSB:

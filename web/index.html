@@ -452,7 +452,8 @@
 		><button class="sbitxv3-btn macro-btn" id="F8">F8</button
 		><button class="sbitxv3-btn macro-btn" id="F9">F9</button
 		><button class="sbitxv3-btn macro-btn" id="F10">F10</button>
-		<button class="sbitxv3-btn" id="keyb-toggle">KEYB</button
+		<button class="sbitxv3-btn" id="wf3-toggle">3D</button
+		><button class="sbitxv3-btn" id="keyb-toggle">KEYB</button
 		><button class="sbitxv3-btn" id="logs-open">LOG</button
 		><button class="sbitxv3-btn" id="console-open">CMD</button
 		><button class="sbitxv3-btn" id="telnet-open">TEL</button
@@ -2262,6 +2263,7 @@ $("#console-open").on("click", show_console_panel);
 $("#logs-open").on("click", function(){ window.open("/logs.html", "_blank"); });
 var kbd_enabled = false;
 $("#keyb-toggle").on("click", function(){ kbd_enabled = !kbd_enabled; $("#keybd").toggle(kbd_enabled); });
+$("#wf3-toggle").on("click", function(){ websocket_send("wf"); });
 var worked_calls = {};
 var skip_prefixes = [];
 function load_worked(){
@@ -2295,6 +2297,7 @@ var CMD_LIST = [
  ["queue", "Hunter queue", "Shows the stations queued to be answered with SNR, trend and tries"],
  ["session antenna=EFHW 49:1", "Session note", "Adds a note to the session log; antenna=... also updates the PSK Reporter antenna info"],
  ["span 25K", "Spectrum span", "Sets the waterfall span: 25K, 10K, 6K or 2.5K"],
+ ["wf", "3D waterfall", "Toggles the radio display between 3D and classic waterfall"],
  ["bmask", "Birdie mask status", "Reports how many spurs are masked or being learned"],
  ["screen off", "Screen off", "Blanks the radio screen. Touching the screen wakes it"],
  ["screen 40", "Brightness", "Sets screen brightness 5..100 percent"],

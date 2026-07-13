@@ -120,11 +120,14 @@ replaced by five buttons:
 
 | Button | Action |
 |---|---|
-| `3D WF` | Toggle 3D ↔ classic waterfall |
+| `3D WF` | Toggle 3D ↔ classic waterfall (web UI: the `3D` button next to KEYB) |
 | `SILENT` | Mute audio + sidetone and blank the screen (touch to wake) |
-| `MENU` | Print the command list in the console |
 | `SKIP` | Abort the current hunter target, bar it for today |
 | `QUEUE` | Show the stations waiting to be answered |
+
+`MENU` (prints the command list) sits bottom-right **beside `KBD`** on every
+page except CW/CWR (that row is full), so commands are one tap away in any
+mode. It hides while the on-screen keyboard is open.
 
 
 Pick from the web `CMD` dropdown (each command shows a description), or type
