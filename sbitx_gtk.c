@@ -2694,6 +2694,7 @@ int do_text(struct field *f, cairo_t *gfx, int event, int a, int b, int c){
 		//if it is a command, then execute it and clear the field
 		if (f->value[0] == COMMAND_ESCAPE && strlen(f->value) == 1 && (a == '\n' || a == MIN_KEY_ENTER)){
 			// bare CMD + Enter opens the tappable command menu
+			field_set("KBD", "OFF"); // keyboard would cover the menu
 			cmd_exec("menu");
 			f->value[0] = 0;
 			update_field(f);

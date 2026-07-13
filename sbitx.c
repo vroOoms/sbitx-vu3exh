@@ -334,12 +334,12 @@ void spectrum_update(){
 				if (bmask_score[i-1] < 200 && spectrum_plot[i-1] > bmask_nf + 4) spectrum_plot[i-1] = bmask_nf + 2;
 				if (bmask_score[i+1] < 200 && spectrum_plot[i+1] > bmask_nf + 4) spectrum_plot[i+1] = bmask_nf + 2;
 			}
-			else if (bh > bmask_nf + 2 && bh < 200){
+			else if (bh > bmask_nf && bh < 200){
 				// whiten: subtract each bin's persistent baseline (its windowed
 				// minimum). Wide RFI plateaus and weak spurs sink to the floor;
 				// real FT8 bursts touch the floor every slot gap, so they keep
 				// their full contrast.
-				spectrum_plot[i] -= (bh - bmask_nf - 2);
+				spectrum_plot[i] -= (bh - bmask_nf); // all the way to the floor
 			}
 		}
 	}
