@@ -2692,6 +2692,13 @@ int do_text(struct field *f, cairo_t *gfx, int event, int a, int b, int c){
 
 	if (event == FIELD_EDIT){
 		//if it is a command, then execute it and clear the field
+		if (f->value[0] == COMMAND_ESCAPE && strlen(f->value) == 1 && (a == '\n' || a == MIN_KEY_ENTER)){
+			// bare CMD + Enter opens the tappable command menu
+			cmd_exec("menu");
+			f->value[0] = 0;
+			update_field(f);
+			return 1;
+		}
 		if (f->value[0] == COMMAND_ESCAPE &&  strlen(f->value) > 1 && (a == '\n' || a == MIN_KEY_ENTER)){
 			cmd_exec(f->value + 1);
 			f->value[0] = 0;
