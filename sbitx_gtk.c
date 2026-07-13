@@ -1676,10 +1676,114 @@ void draw_tx_meters(struct field *f, cairo_t *gfx){
 	draw_text(gfx, f->x + 200 , f->y + 5 , meter_str, FONT_FIELD_LABEL);
 }
 
+// ---- 3D waterfall: perspective ridgelines, newest sweep at the front ----
+#define WF3_ROWS 42
+#define WF3_PTS 200
+static unsigned char wf3_hist[WF3_ROWS][WF3_PTS];
+static int wf3_head = 0;
+static int wf3_mode = -1;   // -1 = read data/wf_mode.txt on first draw
+
+static void wf3_load(){
+	if (wf3_mode >= 0)
+		return;
+	wf3_mode = 1;
+	FILE *wfp = fopen("/home/pi/sbitx/data/wf_mode.txt", "r");
+	if (wfp){
+		int v;
+		if (fscanf(wfp, "%d", &v) == 1)
+			wf3_mode = v ? 1 : 0;
+		fclose(wfp);
+	}
+}
+
+static void wf3_set(int m){
+	wf3_mode = m ? 1 : 0;
+	FILE *wfp = fopen("/home/pi/sbitx/data/wf_mode.txt", "w");
+	if (wfp){
+		fprintf(wfp, "%d\n", wf3_mode);
+		fclose(wfp);
+	}
+}
+
+// the classic 2D palette, dimmed by depth
+static void wf3_ramp(int v, double bright, double *r, double *g, double *b){
+	double R, G, B;
+	if (v < 20){ R = 0; G = 0; B = v / 20.0; }
+	else if (v < 40){ R = 0; G = (v - 20) / 20.0; B = 1; }
+	else if (v < 60){ R = 0; G = 1; B = (60 - v) / 20.0; }
+	else if (v < 80){ R = (v - 60) / 20.0; G = 1; B = 0; }
+	else { R = 1; G = (100 - v) / 20.0; B = 0; }
+	*r = R * bright; *g = G * bright; *b = B * bright;
+}
+
+static void draw_waterfall_3d(struct field *f, cairo_t *gfx){
+	// capture this sweep into the history ring
+	for (int p = 0; p < WF3_PTS; p++){
+		int i = (p * f->width) / WF3_PTS;
+		int v = wf[i] * 2;
+		if (v > 100) v = 100;
+		if (v < 0) v = 0;
+		wf3_hist[wf3_head][p] = v;
+	}
+	wf3_head = (wf3_head + 1) % WF3_ROWS;
+
+	cairo_save(gfx);
+	cairo_rectangle(gfx, f->x, f->y, f->width, f->height);
+	cairo_clip(gfx);
+	fill_rect(gfx, f->x, f->y, f->width, f->height, COLOR_BACKGROUND);
+	cairo_set_line_width(gfx, 1);
+
+	for (int k = 0; k < WF3_ROWS; k++){
+		unsigned char *row = wf3_hist[(wf3_head + k) % WF3_ROWS];
+		double t = (double)k / (WF3_ROWS - 1);   // 0 = far/oldest, 1 = front/newest
+		double inset = 26.0 * (1.0 - t);
+		double usable = f->width - 2 * inset;
+		double ybase = f->y + 10 + t * (f->height - 14);
+		double hmax = (f->height * 0.30) * (0.5 + 0.5 * t);
+		// occlude what lies behind this ridge
+		cairo_move_to(gfx, f->x + inset, ybase - (row[0] * hmax) / 100.0);
+		for (int p = 1; p < WF3_PTS; p++)
+			cairo_line_to(gfx, f->x + inset + (p * usable) / (WF3_PTS - 1),
+				ybase - (row[p] * hmax) / 100.0);
+		cairo_line_to(gfx, f->x + inset + usable, ybase + 1);
+		cairo_line_to(gfx, f->x + inset, ybase + 1);
+		cairo_close_path(gfx);
+		cairo_set_source_rgb(gfx, 0, 0, 0);
+		cairo_fill(gfx);
+		// the ridge itself, fading into the distance
+		double br = 0.35 + 0.65 * t;
+		cairo_set_source_rgb(gfx, 0.10 * br, 0.75 * br, 0.85 * br);
+		cairo_move_to(gfx, f->x + inset, ybase - (row[0] * hmax) / 100.0);
+		for (int p = 1; p < WF3_PTS; p++)
+			cairo_line_to(gfx, f->x + inset + (p * usable) / (WF3_PTS - 1),
+				ybase - (row[p] * hmax) / 100.0);
+		cairo_stroke(gfx);
+		// strong signals glow in their true palette colour
+		for (int p = 1; p < WF3_PTS; p++){
+			if (row[p] > 45){
+				double r2, g2, b2;
+				wf3_ramp(row[p], br, &r2, &g2, &b2);
+				cairo_set_source_rgb(gfx, r2, g2, b2);
+				cairo_move_to(gfx, f->x + inset + ((p - 1) * usable) / (WF3_PTS - 1),
+					ybase - (row[p - 1] * hmax) / 100.0);
+				cairo_line_to(gfx, f->x + inset + (p * usable) / (WF3_PTS - 1),
+					ybase - (row[p] * hmax) / 100.0);
+				cairo_stroke(gfx);
+			}
+		}
+	}
+	cairo_restore(gfx);
+}
+
 void draw_waterfall(struct field *f, cairo_t *gfx){
 
 	if (in_tx){
 		draw_tx_meters(f, gfx);
+		return;
+	}
+	wf3_load();
+	if (wf3_mode){
+		draw_waterfall_3d(f, gfx);
 		return;
 	}
 	memmove(waterfall_map + f->width * 3, waterfall_map, 
@@ -5078,6 +5182,14 @@ void cmd_exec(char *cmd){
 		set_radio_mode(args);
 		update_field(get_field("r1:mode"));
 	}
+	else if (!strcmp(exec, "wf")){
+		wf3_load();
+		if (!strlen(args))
+			wf3_set(!wf3_mode);
+		else
+			wf3_set(!strcmp(args, "3d"));
+		write_console(FONT_LOG, wf3_mode ? "waterfall: 3D\n" : "waterfall: classic\n");
+	}
 	else if (!strcmp(exec, "menu")){
 		write_console(FONT_LOG,
 			"tap a line to run it:\n"
@@ -5090,6 +5202,7 @@ void cmd_exec(char *cmd){
 			"CMD: huntmode hyper - fast\n"
 			"CMD: bmask - birdie mask status\n"
 			"CMD: span 25K - full waterfall\n"
+			"CMD: wf - toggle 3D waterfall\n"
 			"CMD: screen off - blank screen\n"
 			"CMD: silent - mute all + screen\n"
 			"CMD: wake - restore all\n");
