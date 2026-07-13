@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sBITX Dashboard</title>
+<style>
+:root { color-scheme: dark; }
+body { background:#000; color:#0ff; font-family:Helvetica,sans-serif; margin:0; padding:8px; }
+h2 { color:#fff; margin:4px 0; font-size:18px; display:inline-block; }
+.cards { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0; }
+.card { background:#071827; border:1px solid #234; border-radius:8px; padding:7px 13px; min-width:84px; }
+.card b { display:block; font-size:21px; color:#fff; }
+.card span { font-size:11px; color:#8ab; }
+.chip { display:inline-block; padding:9px 13px; background:#0c2333; border:1px solid #333; color:#fff;
+  cursor:pointer; margin:2px; border-radius:6px; font-size:13px; user-select:none; text-decoration:none; }
+.chip.on { background:#049117; }
+#mapwrap { position:relative; border:1px solid #234; margin-top:6px; border-radius:6px; overflow:hidden; }
+canvas { display:block; width:100%; background:#020d1f; }
+#tip { position:absolute; display:none; background:rgba(0,10,20,0.92); border:1px solid #0af; color:#fff;
+  padding:6px 9px; font-size:12px; pointer-events:none; border-radius:6px; white-space:pre; z-index:5; }
+input[type=date] { background:#000; color:#fff; border:1px solid #555; padding:8px; font-size:14px; border-radius:6px; }
+input[type=range] { width:46%; vertical-align:middle; }
+.legend { font-size:12px; color:#9ab; margin-top:4px; }
+.dot { display:inline-block; width:10px; height:10px; border-radius:5px; margin:0 3px 0 8px; }
+#timelabel { color:#ff0; font-size:13px; margin-left:8px; }
+</style>
+</head>
+<body>
+<h2>VU3EXH &mdash; contacts &amp; receptions</h2>
+<a class="chip" href="/logs.html">LOGS</a>
+<a class="chip" href="/index.html">RADIO</a>
+<div class="cards" id="cards"></div>
+<div>
+  <span class="chip lay on" data-l="qso" onclick="tog(this)">QSOs</span>
+  <span class="chip lay on" data-l="heard" onclick="tog(this)">Heard</span>
+  <span class="chip lay on" data-l="lines" onclick="tog(this)">Lines</span>
+  <span class="chip lay on" data-l="grid" onclick="tog(this)">Grid</span>
+  <span class="chip lay" data-l="labels" onclick="tog(this)">Labels</span>
+  <span class="chip lay on" data-l="night" onclick="tog(this)">Night</span>
+  <span id="bandchips"></span>
+</div>
+<div>
+  <input type="date" id="dfrom" onchange="rebuild()">
+  <input type="date" id="dto" onchange="rebuild()">
+  <span class="chip" onclick="quick(0)">Today</span>
+  <span class="chip" onclick="quick(7)">7d</span>
+  <span class="chip" onclick="quick(-1)">All</span>
+  <span class="chip" id="playbtn" onclick="play()">&#9654; Replay</span>
+  <input type="range" id="cursor" min="0" max="200" value="200" oninput="draw()">
+  <span id="timelabel"></span>
+</div>
+<div id="mapwrap"><canvas id="map"></canvas><div id="tip"></div></div>
+<div class="legend" id="legend"></div>
+<script>
+var MYGRID = 'MK82SX', MYCALL = 'VU3EXH';
+var BANDCOL = {'80m':'#ff6ec7','40m':'#ffa040','30m':'#c0ff00','20m':'#ffe700',
+               '17m':'#00e5ff','15m':'#7cfc00','12m':'#ff5555','10m':'#e070ff'};
+var world = [], qsos = [], heard = [], layers = {qso:1, heard:1, lines:1, grid:1, labels:0, night:1};
+var band = '', tmin = 0, tmax = 0, playing = null;
+
+var bc = '<span class="chip bandc on" data-b="" onclick="setband(this)">all bands</span>';
+Object.keys(BANDCOL).forEach(function(b){
+  bc += '<span class="chip bandc" data-b="' + b + '" style="border-color:' + BANDCOL[b] + '" onclick="setband(this)">' + b + '</span>';
+});
+document.getElementById('bandchips').innerHTML = bc;
+document.getElementById('legend').innerHTML = 'bands: ' + Object.keys(BANDCOL).map(function(b){
+  return '<span class="dot" style="background:' + BANDCOL[b] + '"></span>' + b;
+}).join('') + ' &nbsp; &#9733; = you (MK82SX). Big dots = worked, small dots = heard. Tap a dot for details.';
+
+function tog(e){
+  layers[e.dataset.l] = !layers[e.dataset.l];
+  e.className = 'chip lay' + (layers[e.dataset.l] ? ' on' : '');
+  draw();
+}
+function setband(e){
+  band = e.dataset.b;
+  document.querySelectorAll('.bandc').forEach(function(x){
+    x.className = 'chip bandc' + (x.dataset.b == band ? ' on' : '');
+  });
+  draw();
+}
+function isoDay(o){ return new Date(Date.now() - o*864e5).toISOString().slice(0,10); }
+function quick(days){
+  var f = document.getElementById('dfrom'), t = document.getElementById('dto');
+  if (days < 0){ f.value = ''; t.value = ''; }
+  else if (days == 0){ f.value = isoDay(0); t.value = isoDay(0); }
+  else { f.value = isoDay(days); t.value = isoDay(0); }
+  rebuild();
+}
+
+function grid2ll(g){
+  if (!g) return null;
+  g = g.toUpperCase();
+  if (!/^[A-R]{2}[0-9]{2}([A-X]{2})?$/.test(g)) return null;
+  var lon = (g.charCodeAt(0)-65)*20 - 180 + (g.charCodeAt(2)-48)*2;
+  var lat = (g.charCodeAt(1)-65)*10 - 90 + (g.charCodeAt(3)-48);
+  if (g.length >= 6){
+    lon += (g.charCodeAt(4)-65)/12 + 1/24;
+    lat += (g.charCodeAt(5)-65)/24 + 1/48;
+  } else { lon += 1; lat += 0.5; }
+  return {lat:lat, lon:lon};
+}
+var HOME = grid2ll(MYGRID);
+function km(a, b){
+  var R = 6371, dLa = (b.lat-a.lat)*Math.PI/180, dLo = (b.lon-a.lon)*Math.PI/180;
+  var x = Math.sin(dLa/2)*Math.sin(dLa/2)
+    + Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.sin(dLo/2)*Math.sin(dLo/2);
+  return Math.round(R*2*Math.atan2(Math.sqrt(x), Math.sqrt(1-x)));
+}
+
+function csv(line){
+  var out = [], cur = '', q = false;
+  for (var i = 0; i < line.length; i++){
+    var c = line[i];
+    if (q){ if (c == '"') q = false; else cur += c; }
+    else if (c == '"') q = true;
+    else if (c == ','){ out.push(cur); cur = ''; }
+    else cur += c;
+  }
+  out.push(cur);
+  return out;
+}
+function epoch(d, t){ return Date.parse(d + 'T' + t + 'Z'); }
+
+var rawQso = [], rawDec = [];
+function rebuild(){
+  var f = document.getElementById('dfrom').value, t = document.getElementById('dto').value;
+  function okDate(d){ return (!f || d >= f) && (!t || d <= t); }
+
+  qsos = [];
+  rawQso.forEach(function(r){
+    if (r.length < 11 || !okDate(r[0])) return;
+    var ll = grid2ll(r[5]);
+    if (!ll) return;
+    qsos.push({call:r[4], grid:r[5], band:r[2], ts:epoch(r[0],r[1]), when:r[0]+' '+r[1],
+      country:r[8], ll:ll, dist:km(HOME, ll)});
+  });
+
+  var st = {};
+  rawDec.forEach(function(r){
+    if (r.length < 9 || r[2] != 'RX' || !okDate(r[0])) return;
+    var msg = (r.length >= 11 ? r[10] : r[8]).split(/\s+/);
+    if (msg.length < 2) return;
+    var g = msg[msg.length-1];
+    if (!/^[A-R]{2}[0-9]{2}$/.test(g)) return;
+    var call = msg[0] == 'CQ' ? msg[msg.length-2] : msg[1];
+    if (!call || !/\d/.test(call) || call.indexOf('<') >= 0) return;
+    var ts = epoch(r[0], r[1]);
+    var k = call;
+    if (!st[k]) st[k] = {call:call, grid:g, band:r[3], count:0, snr:-99};
+    var s = st[k];
+    s.count++; s.ts = ts; s.when = r[0]+' '+r[1]; s.band = r[3]; s.grid = g;
+    var sn = parseInt(r[6]);
+    if (sn > s.snr) s.snr = sn;
+  });
+  heard = [];
+  Object.keys(st).forEach(function(k){
+    var s = st[k], ll = grid2ll(s.grid);
+    if (!ll) return;
+    s.ll = ll; s.dist = km(HOME, ll);
+    heard.push(s);
+  });
+
+  tmin = Infinity; tmax = 0;
+  qsos.concat(heard).forEach(function(s){
+    if (s.ts < tmin) tmin = s.ts;
+    if (s.ts > tmax) tmax = s.ts;
+  });
+  if (!isFinite(tmin)){ tmin = Date.now() - 864e5; tmax = Date.now(); }
+  document.getElementById('cursor').value = 200;
+  cards();
+  draw();
+}
+
+function cards(){
+  var q = qsos.filter(function(s){ return !band || s.band == band; });
+  var hd = heard.filter(function(s){ return !band || s.band == band; });
+  var uc = {}, cn = {}, gr = {};
+  q.forEach(function(s){ uc[s.call] = 1; cn[s.country] = 1; });
+  hd.forEach(function(s){ gr[s.grid] = 1; });
+  var bestQ = q.reduce(function(m, s){ return s.dist > (m ? m.dist : 0) ? s : m; }, null);
+  var bestH = hd.reduce(function(m, s){ return s.dist > (m ? m.dist : 0) ? s : m; }, null);
+  function card(v, k){ return '<div class="card"><b>' + v + '</b><span>' + k + '</span></div>'; }
+  document.getElementById('cards').innerHTML =
+    card(q.length, 'QSOs') + card(Object.keys(uc).length, 'unique calls')
+    + card(Object.keys(cn).length, 'countries')
+    + card(hd.length, 'stations heard') + card(Object.keys(gr).length, 'grids heard')
+    + card(bestQ ? bestQ.dist + ' km' : '-', 'best DX worked' + (bestQ ? ' (' + bestQ.call + ')' : ''))
+    + card(bestH ? bestH.dist + ' km' : '-', 'furthest heard' + (bestH ? ' (' + bestH.call + ')' : ''));
+}
+
+var cv = document.getElementById('map'), ctx = cv.getContext('2d');
+var W = 0, H = 0;
+function size(){
+  W = cv.clientWidth;
+  H = Math.max(300, Math.min(Math.round(W/2), window.innerHeight - cv.getBoundingClientRect().top - 40));
+  cv.width = W; cv.height = H;
+}
+function prj(lat, lon){ return {x:(lon+180)/360*W, y:(90-lat)/180*H}; }
+
+function cutoff(){
+  var c = document.getElementById('cursor').value / 200;
+  return tmin + c * (tmax - tmin);
+}
+
+function draw(){
+  if (!W) size();
+  var tcut = cutoff();
+  document.getElementById('timelabel').textContent =
+    (document.getElementById('cursor').value < 200 ? 'up to ' : '') + new Date(tcut).toISOString().slice(0,16).replace('T',' ') + 'z';
+
+  ctx.fillStyle = '#020d1f';
+  ctx.fillRect(0, 0, W, H);
+
+  // land
+  ctx.fillStyle = '#0c2b18';
+  ctx.strokeStyle = '#1d5c3a';
+  ctx.lineWidth = 1;
+  world.forEach(function(poly){
+    ctx.beginPath();
+    for (var i = 0; i < poly.length; i++){
+      var p = prj(poly[i][1], poly[i][0]);
+      if (i) ctx.lineTo(p.x, p.y); else ctx.moveTo(p.x, p.y);
+    }
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+  });
+
+  if (layers.night) night(tcut);
+
+  if (layers.grid){
+    ctx.strokeStyle = 'rgba(120,170,220,0.18)';
+    ctx.fillStyle = 'rgba(120,170,220,0.35)';
+    ctx.font = '9px monospace';
+    for (var lo = -180; lo < 180; lo += 20){
+      var p = prj(0, lo);
+      ctx.beginPath(); ctx.moveTo(p.x, 0); ctx.lineTo(p.x, H); ctx.stroke();
+    }
+    for (var la = -90; la < 90; la += 10){
+      var p2 = prj(la, 0);
+      ctx.beginPath(); ctx.moveTo(0, p2.y); ctx.lineTo(W, p2.y); ctx.stroke();
+      for (var lo2 = -180; lo2 < 180; lo2 += 20){
+        var f1 = String.fromCharCode(65 + (lo2+180)/20), f2 = String.fromCharCode(65 + (la+90)/10);
+        var pp = prj(la + 5, lo2 + 10);
+        ctx.fillText(f1 + f2, pp.x - 6, pp.y);
+      }
+    }
+  }
+
+  var home = prj(HOME.lat, HOME.lon);
+
+  if (layers.heard){
+    heard.forEach(function(s){
+      if (band && s.band != band) return;
+      if (s.ts > tcut) return;
+      var p = prj(s.ll.lat, s.ll.lon);
+      ctx.fillStyle = BANDCOL[s.band] || '#888';
+      ctx.globalAlpha = 0.55;
+      ctx.beginPath(); ctx.arc(p.x, p.y, 2.5, 0, 7); ctx.fill();
+      ctx.globalAlpha = 1;
+      if (layers.labels){ ctx.fillStyle = '#789'; ctx.font = '9px monospace'; ctx.fillText(s.call, p.x + 4, p.y); }
+    });
+  }
+
+  if (layers.qso){
+    qsos.forEach(function(s){
+      if (band && s.band != band) return;
+      if (s.ts > tcut) return;
+      var p = prj(s.ll.lat, s.ll.lon);
+      var col = BANDCOL[s.band] || '#fff';
+      if (layers.lines){
+        ctx.strokeStyle = col;
+        ctx.globalAlpha = 0.7;
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.moveTo(home.x, home.y);
+        ctx.quadraticCurveTo((home.x + p.x)/2, Math.min(home.y, p.y) - Math.abs(home.x - p.x)*0.12, p.x, p.y);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+      ctx.fillStyle = col;
+      ctx.beginPath(); ctx.arc(p.x, p.y, 4.5, 0, 7); ctx.fill();
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(p.x, p.y, 4.5, 0, 7); ctx.stroke();
+      if (layers.labels){ ctx.fillStyle = '#fff'; ctx.font = '10px monospace'; ctx.fillText(s.call, p.x + 5, p.y - 3); }
+    });
+  }
+
+  // home star
+  ctx.fillStyle = '#ff3'; ctx.strokeStyle = '#ff3';
+  ctx.font = '16px sans-serif';
+  ctx.fillText('★', home.x - 8, home.y + 6);
+}
+
+function night(t){
+  var d = new Date(t);
+  var day = (Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) - Date.UTC(d.getUTCFullYear(), 0, 0)) / 864e5;
+  var dec = -23.44 * Math.cos(2*Math.PI/365 * (day + 10)) * Math.PI/180;
+  var utcH = d.getUTCHours() + d.getUTCMinutes()/60;
+  var slon = (12 - utcH) * 15;
+  ctx.beginPath();
+  var first = true;
+  for (var lon = -180; lon <= 180; lon += 3){
+    var Hh = (lon - slon) * Math.PI/180;
+    var lat = Math.atan(-Math.cos(Hh) / Math.tan(dec)) * 180/Math.PI;
+    var p = prj(lat, lon);
+    if (first){ ctx.moveTo(p.x, p.y); first = false; } else ctx.lineTo(p.x, p.y);
+  }
+  var poleY = dec > 0 ? H : 0;   // if northern summer, the dark pole is the south
+  ctx.lineTo(W, poleY); ctx.lineTo(0, poleY);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(0,0,40,0.42)';
+  ctx.fill();
+}
+
+function play(){
+  if (playing){ clearInterval(playing); playing = null;
+    document.getElementById('playbtn').innerHTML = '&#9654; Replay'; return; }
+  var c = document.getElementById('cursor');
+  if (c.value >= 200) c.value = 0;
+  document.getElementById('playbtn').innerHTML = '&#9646;&#9646; Stop';
+  playing = setInterval(function(){
+    c.value = parseInt(c.value) + 1;
+    draw();
+    if (c.value >= 200){ clearInterval(playing); playing = null;
+      document.getElementById('playbtn').innerHTML = '&#9654; Replay'; }
+  }, 120);
+}
+
+// tap for details
+cv.addEventListener('click', function(ev){
+  var r = cv.getBoundingClientRect();
+  var mx = (ev.clientX - r.left) * (W / r.width), my = (ev.clientY - r.top) * (H / r.height);
+  var best = null, bd = 18;
+  qsos.concat(heard).forEach(function(s){
+    if (band && s.band != band) return;
+    var p = prj(s.ll.lat, s.ll.lon);
+    var d = Math.abs(p.x - mx) + Math.abs(p.y - my);
+    if (d < bd){ bd = d; best = s; }
+  });
+  var tip = document.getElementById('tip');
+  if (!best){ tip.style.display = 'none'; return; }
+  var worked = best.country !== undefined;
+  tip.textContent = best.call + '  ' + best.grid + (worked ? '  ' + best.country : '')
+    + '\n' + best.band + '  ' + best.dist + ' km'
+    + (worked ? '\nworked ' : '\nheard ') + best.when + 'z'
+    + (best.snr !== undefined && !worked ? '\nbest snr ' + best.snr + ', ' + best.count + ' decodes' : '');
+  var p = prj(best.ll.lat, best.ll.lon);
+  tip.style.left = Math.min(p.x / W * r.width + 10, r.width - 170) + 'px';
+  tip.style.top = Math.max(p.y / H * r.height - 40, 4) + 'px';
+  tip.style.display = 'block';
+});
+
+function loadAll(){
+  Promise.all([
+    fetch('/world.json?t=' + Date.now()).then(function(r){ return r.json(); }).catch(function(){ return []; }),
+    fetch('/data/qso_log.csv?t=' + Date.now()).then(function(r){ return r.ok ? r.text() : ''; }),
+    fetch('/data/ft8_decodes.csv?t=' + Date.now()).then(function(r){ return r.ok ? r.text() : ''; })
+  ]).then(function(res){
+    world = res[0];
+    rawQso = res[1] ? res[1].trim().split('\n').map(csv) : [];
+    rawDec = res[2] ? res[2].trim().split('\n').map(csv) : [];
+    size();
+    rebuild();
+  });
+}
+window.addEventListener('resize', function(){ size(); draw(); });
+loadAll();
+setInterval(loadAll, 60000);
+</script>
+</body>
+</html>

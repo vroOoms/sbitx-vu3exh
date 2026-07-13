@@ -157,15 +157,41 @@ the web CMD panel needs no backslash):
 
 ## 6. Logs, stats and backups (web LOG button)
 
+Every tab obeys the same filter bar: **free-text search** (call, grid,
+country, message text), a **calendar date range** with one-tap chips
+(Today / Yesterday / 7 days / 30 days / All), **band chips** and RX/TX
+chips — all sized for a touchscreen.
+
 - **QSOs** — every contact with band, grid, reports, **country**, and the
   **measured watts + SWR** of your final transmission.
 - **Decodes** — everything heard and sent (`TXEND` rows carry power/SWR).
 - **Missed CQs** — stations that called CQ and were never worked: last
   heard, how long ago, band, SNR. Your to-do list.
-- **Stats** — session length, stations heard vs workable, attempts vs
-  completed, realistic capacity, your average QSO time, TX airtime share.
-- **Sessions** — one entry per radio start with your `session` notes.
+- **Report** — a general report of whatever the filters select: QSOs,
+  unique calls, countries, stations/grids heard, transmissions, average
+  power, per-band and per-day tables, activity-by-hour bars, plus the
+  current session efficiency block.
+- **Sessions** — one card per radio start. **Tap a session** to see only
+  its QSOs; each card also has Decodes and Report buttons that filter the
+  other tabs to that session's time window (a green banner shows the
+  active session filter — tap ✕ to clear).
 - CSV downloads + **Backup all logs** (tarball of everything on the SD card).
+
+### The MAP dashboard (web MAP button, or `/map.html`)
+
+A world map of your contacts and receptions, pskreporter style:
+
+- **Big dots + curved lines** = stations you worked (color = band);
+  **small dots** = stations you heard with their grids. ★ is you.
+- Cards on top: QSOs, unique calls, countries, stations/grids heard,
+  **best DX worked** and **furthest heard** (great-circle km from MK82SX).
+- Overlay toggles: QSOs / Heard / Lines / **Maidenhead grid** / Labels /
+  **day-night terminator**. Band chips and a calendar range filter
+  everything, including the cards.
+- **▶ Replay** animates your log over time with the slider — watch the
+  contacts march across the globe as propagation changed.
+- Tap any dot for call, grid, country, band, distance and when you
+  worked/heard it. Data refreshes every minute.
 
 ## 7. Spotting networks
 
