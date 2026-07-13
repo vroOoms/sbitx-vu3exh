@@ -115,12 +115,13 @@ to answer.
 
 ## 5. Commands
 
-**FT8 command buttons** — on the FT8 screen the old on-screen F1–F8 row is
-replaced by five buttons:
+**Command buttons** — the top-row `WEB` button is now **`3D`**: it toggles
+the 3D ↔ classic waterfall from any mode (the web UI `3D` button next to
+KEYB sends the same toggle). On the FT8 screen the old on-screen F1–F8 row
+is replaced by:
 
 | Button | Action |
 |---|---|
-| `3D WF` | Toggle 3D ↔ classic waterfall (web UI: the `3D` button next to KEYB) |
 | `SILENT` | Mute audio + sidetone and blank the screen (touch to wake) |
 | `SKIP` | Abort the current hunter target, bar it for today |
 | `QUEUE` | Show the stations waiting to be answered |

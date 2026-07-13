@@ -498,7 +498,7 @@ struct field main_controls[] = {
 		"", 0,0,0,COMMON_CONTROL},
 	{ "#record", do_record, 380, 5, 40, 40, "REC", 40, "OFF", FIELD_TOGGLE, FONT_FIELD_VALUE, 
 		"ON/OFF", 0,0, 0,COMMON_CONTROL},
-	{ "#web", NULL, 420,5,  40, 40, "WEB", 40, "", FIELD_BUTTON, FONT_FIELD_VALUE, 
+	{ "#web", do_cmdbtn, 420,5,  40, 40, "3D", 40, "", FIELD_BUTTON, FONT_FIELD_VALUE, 
 		"", 0,0, 0,COMMON_CONTROL},
 	{"#set", NULL, 460, 5, 40, 40, "SET", 1, "", FIELD_BUTTON, FONT_FIELD_VALUE,"", 0,0,0,COMMON_CONTROL}, 
 	{ "rx_nr", NULL, 460, 50, 40, 40, "DNR", 40, "0", FIELD_NUMBER, FONT_FIELD_VALUE, "", 0, 100, 5, COMMON_CONTROL},
@@ -2297,10 +2297,9 @@ static void layout_ui(){
 			field_move("F6", 300, -2000, 50, 45);
 			field_move("F7", 350, -2000, 50, 45);
 			field_move("F8", 400, -2000, 45, 45);
-			field_move("3D WF", 50, y2-47, 85, 45);
-			field_move("SILENT", 137, y2-47, 85, 45);
-			field_move("SKIP", 224, y2-47, 85, 45);
-			field_move("QUEUE", 311, y2-47, 80, 45);
+			field_move("SILENT", 50, y2-47, 110, 45);
+			field_move("SKIP", 162, y2-47, 110, 45);
+			field_move("QUEUE", 274, y2-47, 110, 45);
 			field_move("FT8_REPEAT", 395, y2-47, 50, 45);
 			field_move("FT8_TX1ST", 447, y2-47, 50, 45);
 			field_move("FT8_AUTO", 499, y2-47, 50, 45);
@@ -3078,7 +3077,7 @@ int do_tuning(struct field *f, cairo_t *gfx, int event, int a, int b, int c){
 
 int do_cmdbtn(struct field *f, cairo_t *gfx, int event, int a, int b, int c){
 	if (event == GDK_BUTTON_PRESS){
-		if (!strcmp(f->label, "3D WF"))
+		if (!strcmp(f->label, "3D WF") || !strcmp(f->label, "3D"))
 			cmd_exec("wf");
 		else if (!strcmp(f->label, "SILENT"))
 			cmd_exec("silent");
