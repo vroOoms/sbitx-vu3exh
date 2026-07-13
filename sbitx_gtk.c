@@ -1683,8 +1683,8 @@ void draw_tx_meters(struct field *f, cairo_t *gfx){
 }
 
 // ---- 3D waterfall: perspective ridgelines, newest sweep at the front ----
-#define WF3_ROWS 32
-#define WF3_PTS 160
+#define WF3_ROWS 48
+#define WF3_PTS 120
 static unsigned char wf3_hist[WF3_ROWS][WF3_PTS];
 static int wf3_head = 0;
 static int wf3_mode = -1;   // -1 = read data/wf_mode.txt on first draw
@@ -1711,72 +1711,101 @@ static void wf3_set(int m){
 	}
 }
 
-// the classic 2D palette, dimmed by depth
-static void wf3_ramp(int v, double bright, double *r, double *g, double *b){
+// terrain shading: dark blue floor -> blue -> cyan -> white peaks,
+// dimmed with distance (SDR-Console look)
+static void wf3_shade(int v, double depth, double *r, double *g, double *b){
 	double R, G, B;
-	if (v < 20){ R = 0; G = 0; B = v / 20.0; }
-	else if (v < 40){ R = 0; G = (v - 20) / 20.0; B = 1; }
-	else if (v < 60){ R = 0; G = 1; B = (60 - v) / 20.0; }
-	else if (v < 80){ R = (v - 60) / 20.0; G = 1; B = 0; }
-	else { R = 1; G = (100 - v) / 20.0; B = 0; }
-	*r = R * bright; *g = G * bright; *b = B * bright;
+	if (v < 25){ double u = v / 25.0;
+		R = 0.02 + 0.08*u; G = 0.05 + 0.15*u; B = 0.28 + 0.30*u; }
+	else if (v < 55){ double u = (v - 25) / 30.0;
+		R = 0.10 + 0.08*u; G = 0.20 + 0.28*u; B = 0.58 + 0.30*u; }
+	else if (v < 80){ double u = (v - 55) / 25.0;
+		R = 0.18 + 0.42*u; G = 0.48 + 0.37*u; B = 0.88 + 0.12*u; }
+	else { double u = (v - 80) / 20.0;
+		R = 0.60 + 0.38*u; G = 0.85 + 0.13*u; B = 1.0; }
+	double br = 0.55 + 0.45 * depth;
+	*r = R * br; *g = G * br; *b = B * br;
 }
 
 static cairo_surface_t *wf3_surf = NULL;
 static int wf3_sw = 0, wf3_sh = 0;
 static int wf3_last_render = 0;
+static int wf3_last_row = 0;
 
 static void wf3_render(struct field *f){
-	// capture this sweep into the history ring
+	// capture this sweep; stretch against the live noise floor so a
+	// signal 25 units up is already a white peak (SDR-Console contrast)
+	unsigned char raw[WF3_PTS];
+	int base[WF3_PTS];
+	long s = 0;
 	for (int p = 0; p < WF3_PTS; p++){
 		int i = (p * f->width) / WF3_PTS;
-		int v = wf[i] * 2;
+		base[p] = wf[i] * 2;
+		s += base[p];
+	}
+	int nf = (int)(s / WF3_PTS);
+	for (int p = 0; p < WF3_PTS; p++){
+		int v = (base[p] - nf) * 3 + 14;
 		if (v > 100) v = 100;
 		if (v < 0) v = 0;
-		wf3_hist[wf3_head][p] = v;
+		raw[p] = v;
 	}
-	wf3_head = (wf3_head + 1) % WF3_ROWS;
+	// a new history row only every 400ms (so 48 rows span ~19s);
+	// in between, peak-hold this sweep into the front row
+	int nowr = millis();
+	unsigned char *nr = wf3_hist[wf3_head];
+	if (nowr - wf3_last_row >= 400){
+		wf3_last_row = nowr;
+		wf3_head = (wf3_head + 1) % WF3_ROWS;
+		nr = wf3_hist[wf3_head];
+		nr[0] = raw[0]; nr[WF3_PTS-1] = raw[WF3_PTS-1];
+		for (int p = 1; p < WF3_PTS-1; p++)
+			nr[p] = (raw[p-1] + 2*raw[p] + raw[p+1]) / 4;
+	} else {
+		for (int p = 1; p < WF3_PTS-1; p++){
+			int v = (raw[p-1] + 2*raw[p] + raw[p+1]) / 4;
+			if (v > nr[p]) nr[p] = v;
+		}
+	}
 
 	cairo_t *cg = cairo_create(wf3_surf);
+	cairo_set_antialias(cg, CAIRO_ANTIALIAS_NONE);
 	cairo_set_source_rgb(cg, 0, 0, 0);
 	cairo_paint(cg);
-	cairo_set_line_width(cg, 1);
 
+	double W = wf3_sw, H = wf3_sh;
+	double hmax = H * 0.45;
+	static double xs[2][WF3_PTS], ys[2][WF3_PTS];
+	int cur = 0;
+	// solid surface, painted back to front: each cell is a filled quad
+	// between the previous sweep's edge and this one's
 	for (int k = 0; k < WF3_ROWS; k++){
-		unsigned char *row = wf3_hist[(wf3_head + k) % WF3_ROWS];
-		double t = (double)k / (WF3_ROWS - 1);
-		double inset = 26.0 * (1.0 - t);
-		double usable = wf3_sw - 2 * inset;
-		double ybase = 10 + t * (wf3_sh - 14);
-		double hmax = (wf3_sh * 0.30) * (0.5 + 0.5 * t);
-		cairo_move_to(cg, inset, ybase - (row[0] * hmax) / 100.0);
-		for (int p = 1; p < WF3_PTS; p++)
-			cairo_line_to(cg, inset + (p * usable) / (WF3_PTS - 1),
-				ybase - (row[p] * hmax) / 100.0);
-		cairo_line_to(cg, inset + usable, ybase + 1);
-		cairo_line_to(cg, inset, ybase + 1);
-		cairo_close_path(cg);
-		cairo_set_source_rgb(cg, 0, 0, 0);
-		cairo_fill(cg);
-		double br = 0.35 + 0.65 * t;
-		cairo_set_source_rgb(cg, 0.10 * br, 0.75 * br, 0.85 * br);
-		cairo_move_to(cg, inset, ybase - (row[0] * hmax) / 100.0);
-		for (int p = 1; p < WF3_PTS; p++)
-			cairo_line_to(cg, inset + (p * usable) / (WF3_PTS - 1),
-				ybase - (row[p] * hmax) / 100.0);
-		cairo_stroke(cg);
-		for (int p = 1; p < WF3_PTS; p++){
-			if (row[p] > 48){
+		unsigned char *row = wf3_hist[(wf3_head + 1 + k) % WF3_ROWS];
+		double t = (double)k / (WF3_ROWS - 1);   // 0 = far/oldest, 1 = front
+		double sc = 0.70 + 0.30 * t;
+		double cx = W * 0.5 + W * 0.055 * (1.0 - t);
+		double yb = 12 + t * (H - 16);
+		double hh = hmax * (0.55 + 0.45 * t) / 100.0;
+		for (int p = 0; p < WF3_PTS; p++){
+			xs[cur][p] = cx + (((double)p / (WF3_PTS - 1)) - 0.5) * sc * W;
+			ys[cur][p] = yb - row[p] * hh;
+		}
+		if (k){
+			int back = 1 - cur;
+			for (int p = 0; p + 1 < WF3_PTS; p++){
+				int v = row[p] > row[p+1] ? row[p] : row[p+1];
 				double r2, g2, b2;
-				wf3_ramp(row[p], br, &r2, &g2, &b2);
+				wf3_shade(v, t, &r2, &g2, &b2);
 				cairo_set_source_rgb(cg, r2, g2, b2);
-				cairo_move_to(cg, inset + ((p - 1) * usable) / (WF3_PTS - 1),
-					ybase - (row[p - 1] * hmax) / 100.0);
-				cairo_line_to(cg, inset + (p * usable) / (WF3_PTS - 1),
-					ybase - (row[p] * hmax) / 100.0);
-				cairo_stroke(cg);
+				cairo_move_to(cg, xs[back][p], ys[back][p]);
+				cairo_line_to(cg, xs[back][p+1], ys[back][p+1]);
+				cairo_line_to(cg, xs[cur][p+1], ys[cur][p+1]);
+				cairo_line_to(cg, xs[cur][p], ys[cur][p]);
+				cairo_close_path(cg);
+				cairo_fill(cg);
 			}
 		}
+		cur = 1 - cur;
 	}
 	cairo_destroy(cg);
 }
@@ -1794,7 +1823,7 @@ static void draw_waterfall_3d(struct field *f, cairo_t *gfx){
 		wf3_surf = cairo_image_surface_create(CAIRO_FORMAT_RGB24, wf3_sw, wf3_sh);
 		need = 1;
 	}
-	if (now - wf3_last_render >= 150){
+	if (now - wf3_last_render >= 200){
 		wf3_last_render = now;
 		need = 1;
 	}
