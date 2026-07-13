@@ -27,9 +27,14 @@ input[type=range] { width:46%; vertical-align:middle; }
 </style>
 </head>
 <body>
-<h2>VU3EXH &mdash; contacts &amp; receptions</h2>
-<a class="chip" href="/logs.html">LOGS</a>
-<a class="chip" href="/index.html">RADIO</a>
+<h2 id="title">VU3EXH &mdash; contacts &amp; receptions</h2>
+<a class="chip" href="logs.html">LOGS</a>
+<a class="chip" href="index.html">RADIO</a>
+<span class="chip" onclick="document.getElementById('fup').click()">&#128194; Load your log files</span>
+<span class="chip" onclick="setgrid()">My grid</span>
+<span class="chip" id="radiochip" style="display:none" onclick="radioData()">&#8635; back to radio data</span>
+<input type="file" id="fup" multiple style="display:none" accept=".adi,.adif,.txt,.csv,.log">
+<span id="upinfo" style="color:#ff0;font-size:12px"></span>
 <div class="cards" id="cards"></div>
 <div>
   <span class="chip lay on" data-l="qso" onclick="tog(this)">QSOs</span>
@@ -52,8 +57,9 @@ input[type=range] { width:46%; vertical-align:middle; }
 </div>
 <div id="mapwrap"><canvas id="map"></canvas><div id="tip"></div></div>
 <div class="legend" id="legend"></div>
+<script src="hamlog.js"></script>
 <script>
-var MYGRID = 'MK82SX', MYCALL = 'VU3EXH';
+var MYGRID = 'MK82SX', MYCALL = 'VU3EXH', uploaded = false;
 var BANDCOL = {'80m':'#ff6ec7','40m':'#ffa040','30m':'#c0ff00','20m':'#ffe700',
                '17m':'#00e5ff','15m':'#7cfc00','12m':'#ff5555','10m':'#e070ff'};
 var world = [], qsos = [], heard = [], layers = {qso:1, heard:1, lines:1, grid:1, labels:0, night:1};
@@ -353,17 +359,71 @@ cv.addEventListener('click', function(ev){
 
 function loadAll(){
   Promise.all([
-    fetch('/world.json?t=' + Date.now()).then(function(r){ return r.json(); }).catch(function(){ return []; }),
-    fetch('/data/qso_log.csv?t=' + Date.now()).then(function(r){ return r.ok ? r.text() : ''; }),
-    fetch('/data/ft8_decodes.csv?t=' + Date.now()).then(function(r){ return r.ok ? r.text() : ''; })
+    fetch('world.json?t=' + Date.now()).then(function(r){ return r.json(); }).catch(function(){ return []; }),
+    fetch('/data/qso_log.csv?t=' + Date.now()).then(function(r){ return r.ok ? r.text() : ''; }).catch(function(){ return ''; }),
+    fetch('/data/ft8_decodes.csv?t=' + Date.now()).then(function(r){ return r.ok ? r.text() : ''; }).catch(function(){ return ''; })
   ]).then(function(res){
     world = res[0];
-    rawQso = res[1] ? res[1].trim().split('\n').map(csv) : [];
-    rawDec = res[2] ? res[2].trim().split('\n').map(csv) : [];
+    if (!uploaded){
+      rawQso = res[1] ? res[1].trim().split('\n').map(csv) : [];
+      rawDec = res[2] ? res[2].trim().split('\n').map(csv) : [];
+      if (!rawQso.length && !rawDec.length)
+        document.getElementById('upinfo').textContent =
+          'no radio data here - tap "Load your log files" and pick an ADIF and/or WSJT-X ALL.TXT';
+    }
     size();
     rebuild();
   });
 }
+
+// ---- bring your own logs: ADIF / WSJT-X ALL.TXT / sBITX csv ----
+function setgrid(){
+  var g = prompt('Your Maidenhead grid (4 or 6 chars, e.g. FN42 or MK82SX)', MYGRID);
+  if (g && grid2ll(g)){ MYGRID = g.toUpperCase(); HOME = grid2ll(MYGRID); rebuild(); }
+}
+function radioData(){
+  uploaded = false;
+  document.getElementById('upinfo').textContent = '';
+  document.getElementById('radiochip').style.display = 'none';
+  loadAll();
+}
+document.getElementById('fup').addEventListener('change', function(ev){
+  var files = Array.prototype.slice.call(ev.target.files);
+  if (!files.length) return;
+  var nq = [], nd = [], loaded = [], pending = files.length;
+  files.forEach(function(file){
+    var rd = new FileReader();
+    rd.onload = function(){
+      var text = rd.result || '';
+      var kind = hamlogSniff(file.name, text);
+      if (kind == 'adif'){
+        var a = parseADIF(text);
+        nq = nq.concat(a.rows);
+        if (a.mygrid && grid2ll(a.mygrid)){ MYGRID = a.mygrid.toUpperCase(); HOME = grid2ll(MYGRID); }
+        if (a.mycall) MYCALL = a.mycall.toUpperCase();
+      }
+      else if (kind == 'alltxt') nd = nd.concat(parseALLTXT(text));
+      else if (kind == 'qsocsv') nq = nq.concat(text.trim().split('\n').map(csv));
+      else if (kind == 'deccsv') nd = nd.concat(text.trim().split('\n').map(csv));
+      loaded.push(file.name + (kind ? '' : ' (unrecognized)'));
+      if (--pending == 0){
+        uploaded = true;
+        if (nq.length) rawQso = nq;
+        if (nd.length) rawDec = nd;
+        document.getElementById('title').textContent = MYCALL + ' — contacts & receptions';
+        document.getElementById('upinfo').textContent = 'showing: ' + loaded.join(', ')
+          + ' (' + nq.length + ' QSOs, ' + nd.length + ' decodes)';
+        document.getElementById('radiochip').style.display = 'inline-block';
+        document.getElementById('legend').innerHTML =
+          document.getElementById('legend').innerHTML.replace('MK82SX', MYGRID);
+        rebuild();
+      }
+    };
+    rd.readAsText(file);
+  });
+  ev.target.value = '';
+});
+
 window.addEventListener('resize', function(){ size(); draw(); });
 loadAll();
 setInterval(loadAll, 60000);

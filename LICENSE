@@ -1,0 +1,32 @@
+MIT License — for the VU3EXH additions in this repository
+
+Copyright (c) 2026 VU3EXH
+
+This license covers the custom additions in this fork: the FT8 hunter/robo
+automation, band-tagged logging, birdie masking, PSK Reporter uplink, the
+eQSL/QRZ uploader, the web dashboard (web/logs.html, web/map.html,
+web/hamlog.js), the touch command menu, the 3D waterfall, and the
+documentation (README.md, FEATURES.md).
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+The underlying sBITX firmware is copyright Ashhar Farhan (VU2ESE) and
+contributors — see https://github.com/afarhan/sbitx for its terms. The
+ft8_lib decoder is MIT (Karlis Goba, YL3JG). The world map outline
+(web/world.json) is derived from Natural Earth (public domain).

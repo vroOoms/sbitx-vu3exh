@@ -4,6 +4,26 @@ Custom firmware for the sBITX v2/v3 built on [afarhan/sbitx](https://github.com/
 This README is the **how-to-use manual**. For per-feature internals see
 [FEATURES.md](FEATURES.md).
 
+## For other hams — this is open source
+
+MIT-licensed additions on top of Ashhar Farhan's sBITX (see [LICENSE](LICENSE)).
+Two ways to use it:
+
+1. **On an sBITX**: clone this repo onto the radio, `./build sbitx`, run.
+   Everything in this manual works out of the box.
+2. **Just the log dashboard — any radio, any logger**: take the `web/`
+   folder, serve it with any web server (`python3 -m http.server` is
+   enough), open `map.html` or `logs.html` and tap **"Load your log files"**:
+   - **ADIF** (`.adi`/`.adif`) exports from any logger (WSJT-X, QRZ, LoTW,
+     eQSL, Log4OM, Cloudlog...) — your QSOs appear on the world map with
+     band colors, distances, best DX and time replay;
+   - **WSJT-X `ALL.TXT`** — every station you ever decoded, mapped by grid;
+   - the sBITX CSVs from `data/`.
+
+   Your grid is read from the ADIF (`MY_GRIDSQUARE`) or set with the
+   **My grid** button. Files are parsed entirely in your browser —
+   nothing is uploaded anywhere.
+
 Everything works from two places:
 - **The radio's touchscreen** — fields, taps and the `KBD` command line.
 - **The web UI** — `http://<radio-ip>:8080` (passkey login). Same information,
@@ -192,6 +212,8 @@ A world map of your contacts and receptions, pskreporter style:
   contacts march across the globe as propagation changed.
 - Tap any dot for call, grid, country, band, distance and when you
   worked/heard it. Data refreshes every minute.
+- **Load your log files** — feed any ADIF or WSJT-X ALL.TXT (yours or a
+  friend's) and see it mapped; "back to radio data" restores the live view.
 
 ## 7. Spotting networks
 
