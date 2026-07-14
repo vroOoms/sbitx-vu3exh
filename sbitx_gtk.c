@@ -371,6 +371,7 @@ static int scan_settle = 0;
 #define SCAN_MAX_HITS 48
 static int scan_hit_f[SCAN_MAX_HITS], scan_hit_db[SCAN_MAX_HITS], scan_hit_w[SCAN_MAX_HITS], scan_nhits = 0;
 static int scan_return_freq = 0;
+static int scan_saved_audio = -1;
 static struct field *f_hover = NULL;
 static struct field *f_last_text = NULL;
 
@@ -4152,6 +4153,15 @@ void set_radio_mode(char *mode){
 }
 
 
+static void scan_audio_restore(){
+	if (scan_saved_audio >= 0){
+		char ab[12];
+		sprintf(ab, "%d", scan_saved_audio);
+		field_set("AUDIO", ab);
+		scan_saved_audio = -1;
+	}
+}
+
 static void scan_add_hit(int f, int db, int w){
 	for (int i = 0; i < scan_nhits; i++){
 		if (abs(scan_hit_f[i] - f) < 1000){
@@ -4173,9 +4183,9 @@ static void scan_report(){
 			t=scan_hit_db[i];scan_hit_db[i]=scan_hit_db[j];scan_hit_db[j]=t;
 			t=scan_hit_w[i];scan_hit_w[i]=scan_hit_w[j];scan_hit_w[j]=t;
 		}
-	sprintf(b, "== Scan done: %d active ==\n", scan_nhits);
+	sprintf(b, "== Scan done: %d active, strongest first - tap a line to tune ==\n", scan_nhits);
 	write_console(FONT_LOG, b);
-	for (int i = 0; i < scan_nhits && i < 15; i++){
+	for (int i = 0; i < scan_nhits && i < 20; i++){
 		const char *m = scan_hit_w[i] <= 3 ? "CW " : (scan_hit_w[i] <= 25 ? "DIG" : "SSB");
 		sprintf(b, "%d.%d %s (%d)\n", scan_hit_f[i]/1000, (scan_hit_f[i]%1000)/100, m, scan_hit_db[i]);
 		write_console(FONT_LOG, b);
@@ -4318,6 +4328,7 @@ static void scan_tick(){
 	{ int cfx = atoi(get_field("r1:freq")->value);
 	  if (scan_last_set && cfx != scan_last_set){
 		scan_active = 0;
+		scan_audio_restore();
 		field_set("SCAN", "OFF");
 		write_console(FONT_LOG, "Scan stopped (manual tune)\n");
 		return; } }
@@ -4339,6 +4350,7 @@ static void scan_tick(){
 	scan_cur += 20000;
 	if (scan_cur > scan_hi || scan_cur < scan_lo){
 		scan_active = 0;
+		scan_audio_restore();
 		char sr[100]; char fb[20];
 		set_operating_freq(scan_return_freq, sr);
 		sprintf(fb, "%d", scan_return_freq);
@@ -4960,10 +4972,12 @@ void do_control_action(char *cmd){
 		scan_cur = cf; scan_last_set = 0;
 		scan_return_freq = cf; scan_nhits = 0;
 		scan_active = 1;
-		char sbuf[100]; sprintf(sbuf, "Band scan: %d-%d kHz\n", scan_lo/1000, scan_hi/1000);
+		scan_saved_audio = atoi(field_str("AUDIO"));
+		field_set("AUDIO", "0");
+		char sbuf[100]; sprintf(sbuf, "Band scan: %d-%d kHz (audio muted)\n", scan_lo/1000, scan_hi/1000);
 		write_console(FONT_LOG, sbuf);
 	}
-	else if (!strcmp(request, "SCAN OFF")){ scan_active = 0; write_console(FONT_LOG, "Band scan stopped\n"); }
+	else if (!strcmp(request, "SCAN OFF")){ scan_active = 0; scan_audio_restore(); write_console(FONT_LOG, "Band scan stopped\n"); }
 	else if (!strcmp(request, "WIDE ON") || !strcmp(request, "WIDE OFF")){ layout_ui(); }
 	else if (!strcmp(request, "OPT")){ do_optimize(); }
 	else if (!strcmp(request, "SMART ON")){ adv_force = 1; do_advise(); }
