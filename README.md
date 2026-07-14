@@ -175,6 +175,7 @@ the web CMD panel needs no backslash):
 | `session antenna=EFHW 49:1` | Session note (antenna= also updates PSK Reporter info) |
 | `span 25K/10K/6K/2.5K` | Waterfall span |
 | `wf` | Toggle 3D / classic waterfall (persists) |
+| `shutdown` | Save settings and power the Pi off safely (device menu or web CMD) |
 | `bmask` | Birdie-mask status |
 | `screen off / on / 5..100` | Blank screen (touch wakes) / brightness % |
 | `silent` / `wake` | Audio 0 + sidetone 0 + screen off / restore |

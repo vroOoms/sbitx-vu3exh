@@ -5342,6 +5342,11 @@ void cmd_exec(char *cmd){
 		set_radio_mode(args);
 		update_field(get_field("r1:mode"));
 	}
+	else if (!strcmp(exec, "shutdown")){
+		write_console(FONT_LOG, "Shutting down - wait for the green LED to stop blinking\n");
+		save_user_settings(1);
+		system("(sleep 2; sudo poweroff) &");
+	}
 	else if (!strcmp(exec, "wf")){
 		wf3_load();
 		if (!strlen(args))
@@ -5363,6 +5368,7 @@ void cmd_exec(char *cmd){
 			"CMD: bmask - birdie mask status\n"
 			"CMD: span 25K - full waterfall\n"
 			"CMD: wf - toggle 3D waterfall\n"
+			"CMD: shutdown - power off the radio\n"
 			"CMD: screen off - blank screen\n"
 			"CMD: silent - mute all + screen\n"
 			"CMD: wake - restore all\n");
