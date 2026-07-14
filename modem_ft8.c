@@ -739,7 +739,10 @@ static void hunt_pick(){
 	if (!ft8_hunt_active)
 		return;
 	if (strlen(field_str("CALL"))){
-		if (hunt_target[0]){
+		// never cut our own transmission mid-flight: the slot is already
+		// spent and a truncated FT8 burst decodes for no one. The busy/
+		// fading evidence stays sticky and the switch runs after TX ends.
+		if (hunt_target[0] && !is_in_tx()){
 			if (hunt_target_busy){
 				char note[80];
 				sprintf(note, "HUNT: %s went with another station, next!\n", hunt_target);
@@ -763,7 +766,8 @@ static void hunt_pick(){
 				}
 			}
 		}
-		hunt_target_seen = hunt_target_busy = 0;
+		if (!is_in_tx())
+			hunt_target_seen = hunt_target_busy = 0;
 		if (strlen(field_str("CALL")))
 			return;
 	}

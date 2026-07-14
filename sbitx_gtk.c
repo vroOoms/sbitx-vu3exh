@@ -562,6 +562,8 @@ struct field main_controls[] = {
 	{"#cbtn_menu", do_cmdbtn, 1000, -2000, 80, 45, "MENU", 1, "", FIELD_BUTTON, FONT_FIELD_VALUE,"", 0,0,0,FT8_CONTROL},
 	{"#cbtn_skip", do_cmdbtn, 1000, -2000, 80, 45, "SKIP", 1, "", FIELD_BUTTON, FONT_FIELD_VALUE,"", 0,0,0,FT8_CONTROL},
 	{"#cbtn_q", do_cmdbtn, 1000, -2000, 75, 45, "QUEUE", 1, "", FIELD_BUTTON, FONT_FIELD_VALUE,"", 0,0,0,FT8_CONTROL},
+	{"#cbtn_tone", do_cmdbtn, 1000, -2000, 70, 45, "TONE", 1, "", FIELD_BUTTON, FONT_FIELD_VALUE,"", 0,0,0,FT8_CONTROL},
+	{"#cbtn_ftb", do_cmdbtn, 1000, -2000, 50, 45, "FTBEST", 1, "", FIELD_BUTTON, FONT_FIELD_VALUE,"", 0,0,0,FT8_CONTROL},
 	{"#logbook", NULL, 410, 50, 40, 40, "LOG", 1, "", FIELD_BUTTON, FONT_FIELD_VALUE,"", 0,0,0,COMMON_CONTROL}, 
 	{"#text_in", do_text, 5, 70, 285, 20, "TEXT", 70, "text box", FIELD_TEXT, FONT_LOG, 
 		"nothing valuable", 0,128,0,COMMON_CONTROL},
@@ -2331,9 +2333,9 @@ static void layout_ui(){
 			field_move("SKIP", 162, y2-47, 110, 45);
 			field_move("QUEUE", 274, y2-47, 110, 45);
 			field_move("FT8_REPEAT", 395, y2-47, 50, 45);
-			field_move("FT8_TX1ST", 447, y2-47, 50, 45);
+			field_move("FTBEST", 447, y2-47, 50, 45);
 			field_move("FT8_AUTO", 499, y2-47, 50, 45);
-			field_move("TX_PITCH", 551, y2-47, 70, 45);
+			field_move("TONE", 551, y2-47, 70, 45);
 			field_move("SIDETONE", 623, y2-47, 70, 45);
 		break;
 		case MODE_CW:
@@ -3117,6 +3119,10 @@ int do_cmdbtn(struct field *f, cairo_t *gfx, int event, int a, int b, int c){
 			cmd_exec("skip");
 		else if (!strcmp(f->label, "QUEUE"))
 			cmd_exec("queue");
+		else if (!strcmp(f->label, "TONE"))
+			cmd_exec("txbest");
+		else if (!strcmp(f->label, "FTBEST"))
+			cmd_exec("ftbest");
 		return 1;
 	}
 	return 0;

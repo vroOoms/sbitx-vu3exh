@@ -145,6 +145,12 @@ is replaced by:
 | `SILENT` | Mute audio + sidetone and blank the screen (touch to wake) |
 | `SKIP` | Abort the current hunter target, bar it for today |
 | `QUEUE` | Show the stations waiting to be answered |
+| `TONE` | Move your TX tone to the clearest audio slot (one-tap `txbest`) |
+| `FTBEST` | Ask PSK Reporter which FT8 band is best right now (one-tap `ftbest`) |
+
+The manual `TX1ST` and `TX_PITCH` fields left the screen - the hunter sets
+both automatically per QSO (`TONE` reruns the pitch pick any time); they
+remain settable from the web UI or the keyboard if ever needed.
 
 `MENU` (prints the command list) sits bottom-right **beside `KBD`** on every
 page except CW/CWR (that row is full), so commands are one tap away in any
