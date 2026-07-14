@@ -4153,6 +4153,16 @@ void set_radio_mode(char *mode){
 }
 
 
+static int scan_hold[2048];
+static int scan_acc = 0;
+static int scan_step_ms = 0;
+
+static void scan_hold_clear(){
+	for (int i = 1276; i <= 1796; i++)
+		scan_hold[i] = -1000;
+	scan_acc = 0;
+}
+
 static void scan_audio_restore(){
 	if (scan_saved_audio >= 0){
 		char ab[12];
@@ -4164,8 +4174,9 @@ static void scan_audio_restore(){
 
 static void scan_add_hit(int f, int db, int w){
 	for (int i = 0; i < scan_nhits; i++){
-		if (abs(scan_hit_f[i] - f) < 1000){
-			if (db > scan_hit_db[i]){ scan_hit_f[i]=f; scan_hit_db[i]=db; scan_hit_w[i]=w; }
+		if (abs(scan_hit_f[i] - f) < 2000){
+			if (db > scan_hit_db[i]){ scan_hit_f[i]=f; scan_hit_db[i]=db; }
+			if (w > scan_hit_w[i]) scan_hit_w[i]=w;
 			return;
 		}
 	}
@@ -4332,21 +4343,51 @@ static void scan_tick(){
 		field_set("SCAN", "OFF");
 		write_console(FONT_LOG, "Scan stopped (manual tune)\n");
 		return; } }
-	if (scan_settle){ scan_settle--; return; }
+	int el = millis() - scan_step_ms;
+	if (el < 250) return;   // let the rx settle after the hop
 	extern int spectrum_plot[];
-	for (int i = 1536-260; i <= 1536+260; i++){
-		if (spectrum_plot[i] > scan_thresh
-			&& spectrum_plot[i] >= spectrum_plot[i-1]
-			&& spectrum_plot[i] >  spectrum_plot[i+1]
-			&& spectrum_plot[i] >= spectrum_plot[i-2]
-			&& spectrum_plot[i] >  spectrum_plot[i+2]){
-			int lo = i, hi = i, cut = spectrum_plot[i] - 6;
-			while (lo > 1276 && spectrum_plot[lo-1] > cut) lo--;
-			while (hi < 1796 && spectrum_plot[hi+1] > cut) hi++;
-			int hf = scan_cur + (((i-1536)*46875)/1000);
-			scan_add_hit(hf, spectrum_plot[i], hi-lo+1);
-		}
+	// dwell: max-hold a few frames, so speech pauses and syllables still
+	// paint the full occupied bandwidth of a voice signal
+	for (int i = 1276; i <= 1796; i++)
+		if (spectrum_plot[i] > scan_hold[i])
+			scan_hold[i] = spectrum_plot[i];
+	if (el < 1450) return;  // ~1.2s of max-hold so voice pauses can't hide
+	// noise floor of this step
+	long s = 0; int n = 0;
+	for (int i = 1276; i <= 1796; i++){ s += scan_hold[i]; n++; }
+	int mean = (int)(s / n);
+	long s2 = 0; int n2 = 0;
+	for (int i = 1276; i <= 1796; i++)
+		if (scan_hold[i] <= mean){ s2 += scan_hold[i]; n2++; }
+	int nf = n2 ? (int)(s2 / n2) : mean;
+	// occupied runs above the floor: the run width separates CW/DIG/SSB
+	int i = 1536 - 260;
+	while (i <= 1536 + 260){
+		if (scan_hold[i] > nf + 8){
+			int lo = i, hi = i, pk = scan_hold[i], gap = 0;
+			while (hi < 1536 + 260 && gap <= 2){
+				hi++;
+				if (scan_hold[hi] > nf + 8){
+					gap = 0;
+					if (scan_hold[hi] > pk) pk = scan_hold[hi];
+				} else
+					gap++;
+			}
+			hi -= gap;
+			int w = hi - lo + 1;
+			int hf;
+			if (w > 25) // voice: report the carrier point so a tap lands on it
+				hf = scan_cur + (scan_cur < 10000000
+					? ((hi - 1536) * 46875) / 1000 + 100
+					: ((lo - 1536) * 46875) / 1000 - 100);
+			else
+				hf = scan_cur + ((((lo + hi) / 2 - 1536) * 46875) / 1000);
+			scan_add_hit(hf, pk - nf, w);
+			i = hi + gap + 1;
+		} else
+			i++;
 	}
+	scan_hold_clear();
 	scan_cur += 20000;
 	if (scan_cur > scan_hi || scan_cur < scan_lo){
 		scan_active = 0;
@@ -4364,7 +4405,7 @@ static void scan_tick(){
 	  sprintf(fb, "%d", scan_cur);
 	  field_set("FREQ", fb);
 	  scan_last_set = scan_cur; }
-	scan_settle = 1;
+	scan_step_ms = millis();
 }
 
 // ---- ROBO: auto band-hop to the busiest FT8 band (pskreporter, grid-localized) ----
@@ -4969,8 +5010,15 @@ void do_control_action(char *cmd){
 			if (band_stack[bi].start <= cf && cf <= band_stack[bi].stop) break;
 		if (bi < mb){ scan_lo = band_stack[bi].start; scan_hi = band_stack[bi].stop; }
 		else { scan_lo = cf - 100000; scan_hi = cf + 100000; }
-		scan_cur = cf; scan_last_set = 0;
 		scan_return_freq = cf; scan_nhits = 0;
+		scan_cur = scan_lo;
+		{ char sr[100], fb[20];
+		  set_operating_freq(scan_cur, sr);
+		  sprintf(fb, "%d", scan_cur);
+		  field_set("FREQ", fb);
+		  scan_last_set = scan_cur; }
+		scan_hold_clear();
+		scan_step_ms = millis();
 		scan_active = 1;
 		scan_saved_audio = atoi(field_str("AUDIO"));
 		field_set("AUDIO", "0");
