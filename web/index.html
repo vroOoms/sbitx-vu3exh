@@ -296,7 +296,11 @@
 				<ol size="10" class="sbitx-list-box">
 				</ol>
 			</div>
-			<div id="wsjtx-rx" class="sbitx-list-container" >
+			<div id="hunt-queue-box" class="sbitx-list-container">
+        Queue <span id="hq-count"></span>
+        <ol class="sbitx-list-box" id="hunt-queue"></ol>
+    </div>
+    <div id="wsjtx-rx" class="sbitx-list-container" >
 				RX Frequency
 				<ol size="10" class="sbitx-list-box">
 				</ol>
@@ -306,6 +310,7 @@
 				<div class="sbitxv3-control">
 					<div class="sbitxv3-label">AUTO</div>
 					<select class="sbitxv3-selection sbitx-selection" id="FT8_AUTO">
+						<option value="CQ">CQ</option>
 						<option value="ROBO">ROBO</option>
 						<option value="HUNT">HUNT</option>
 						<option value="ON">ON</option>
@@ -2266,6 +2271,29 @@ $("#map-open").on("click", function(){ window.open("/map.html", "_blank"); });
 var kbd_enabled = false;
 $("#keyb-toggle").on("click", function(){ kbd_enabled = !kbd_enabled; $("#keybd").toggle(kbd_enabled); });
 $("#wf3-toggle").on("click", function(){ websocket_send("wf"); });
+function hq_refresh(){
+	fetch('/data/queue.json?t=' + Date.now()).then(function(r){ return r.ok ? r.json() : []; })
+	.then(function(q){
+		var ol = el('hunt-queue');
+		if (!ol) return;
+		while (ol.firstChild) ol.removeChild(ol.firstChild);
+		q.forEach(function(s){
+			var li = document.createElement('li');
+			li.className = 'sbitx-list-item' + (s.target ? ' wsjtx-message-for-me' : '');
+			li.textContent = (s.target ? '\u25b6 ' : '') + s.call + '  ' + s.snr + 'dB '
+				+ (s.trend > 0 ? '\u2191' : (s.trend < 0 ? '\u2193' : '=')) + ' x' + s.heard
+				+ ' try' + s.tries + ' ' + s.age + 's';
+			li.title = 'click to answer ' + s.call;
+			li.addEventListener('click', function(){
+				if (confirm('Answer ' + s.call + ' now?')) websocket_send('qreply ' + s.call);
+			});
+			ol.appendChild(li);
+		});
+		var hc = el('hq-count');
+		if (hc) hc.textContent = q.length ? '(' + q.length + ')' : '(empty)';
+	}).catch(function(){});
+}
+setInterval(hq_refresh, 10000); hq_refresh();
 var worked_calls = {};
 var skip_prefixes = [];
 function load_worked(){
@@ -2289,6 +2317,8 @@ function cq_caller_of(tokens){
 }
 var CMD_LIST = [
  ["", "pick a command...", ""],
+ ["cq", "Call CQ now", "Sends one CQ on the clearest audio offset. AUTO=CQ keeps calling automatically"],
+ ["swrclear", "Clear SWR blocks", "Lifts the 1-hour auto-TX bans set by the SWR guard - use after your antenna tuner retunes"],
  ["ftbest", "Best FT8 band", "Checks PSK Reporter for live FT8 activity near you, reports spots per band"],
  ["txbest", "Clearest TX tone", "Moves your TX audio offset to the least crowded slot in the passband"],
  ["robobands 20m 17m 15m", "Limit auto bands", "HUNT/ROBO will only use the listed bands. Use: robobands all - to allow every band"],

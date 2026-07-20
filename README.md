@@ -73,6 +73,14 @@ PSK Reporter which FT8 band is busiest **near you**, prints the table
 clearly better (more than 2× your current band), never mid-QSO, and only to
 bands you allowed.
 
+### CQ — be the caller
+`AUTO = CQ` calls **CQ in free slots at random intervals** (15–60 s pause,
+clearest audio offset re-picked each call) and works every answer through
+the full exchange to 73, then calls again. It never answers other
+stations' CQs (that's HUNT). SWR-blocked / non-allowed bands stop it.
+The `CQ` button on the FT8 screen sends **one manual CQ** any time, in
+any AUTO setting.
+
 **Kill switches:** tap `AUTO` to OFF, or the `skip` command to abort just the
 current target, or `abort` to stop any transmission immediately.
 
@@ -90,7 +98,7 @@ none of them stop you tapping a decode manually.
 | **Attempts today** | Max 3 tries per station (2 in hyper) with growing pauses (2 min → 4 min). Counters survive restarts, reset at UTC midnight. | automatic (`data/hunt_day.csv`) |
 | **They ignore us** | If we transmitted at a station 3 separate times and never got a single direct reply, we stop answering their CQs. Once every 24 h the radio makes **one probe attempt** to test whether they still ignore us; any reply clears them. | `ignored` shows the list |
 | **Skip prefixes** | CQs from listed prefixes are never answered (default: `VU` — your own country). | `huntskip VU 8T` / `huntskip none` |
-| **Bad SWR bands** | During every auto TX the SWR is watched live. Above **1.9 for 2 s** → transmission killed mid-flight, band blocked for 1 h, ROBO flees to the next allowed band. | automatic; `robobands` to preselect |
+| **Bad SWR bands** | SWR is watched during every auto TX. Above **1.9 sustained 6 s** → TX killed mid-flight; band blocked 1 h only if the **settled end-of-TX** SWR is still high — so an antenna tuner's brief retune spikes are forgiven. `swrclear` lifts blocks instantly. | automatic; `robobands` to preselect |
 | **Band preselect** | HUNT/ROBO only operate on bands you allow. | `robobands 20m 17m 15m` / `robobands all` |
 | **Junk callsigns** | A CQ must contain a structurally valid callsign (prefix+digit+1–4 letter suffix, `/` composites OK) and, if present, a valid grid — free-text like `YR50NADIA` is displayed but never answered. | automatic |
 | **Skip this one** | Aborts the current hunter target and bars it for the rest of the day. | `skip` |
@@ -142,6 +150,7 @@ is replaced by:
 
 | Button | Action |
 |---|---|
+| `CQ` | Send one CQ now (manual; `AUTO = CQ` calls repeatedly for you) |
 | `SILENT` | Mute audio + sidetone and blank the screen (touch to wake) |
 | `SKIP` | Abort the current hunter target, bar it for today |
 | `QUEUE` | Show the stations waiting to be answered |
@@ -164,7 +173,10 @@ the web CMD panel needs no backslash):
 
 | Command | What it does |
 |---|---|
-| `queue` | Stations waiting to be answered (snr, trend, tries, age) |
+| `queue` | Stations waiting to be answered — **tap a line to answer that station**; same list lives in the web UI's Queue panel (click a row there) |
+| `qreply CALL` | Answer a queued station by callsign |
+| `cq` | Send one CQ now |
+| `swrclear` | Lift the 1-hour SWR band blocks (after your antenna tuner retunes) |
 | `ignored` | Stations blacklisted for ignoring us |
 | `skip` | Abort current hunter target, bar it for today |
 | `ftbest` | Live FT8 activity per band + where your signal is heard |

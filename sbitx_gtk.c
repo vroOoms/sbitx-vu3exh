@@ -462,6 +462,9 @@ int do_toggle_kbd(struct field *f, cairo_t *gfx, int event, int a, int b, int c)
 int do_mouse_move(struct field *f, cairo_t *gfx, int event, int a, int b, int c);
 int do_macro(struct field *f, cairo_t *gfx, int event, int a, int b, int c);
 int do_cmdbtn(struct field *f, cairo_t *gfx, int event, int a, int b, int c);
+void ft8_cq_now(void);
+void hunt_reply_call(const char *call);
+void hunt_swr_clear(void);
 int do_record(struct field *f, cairo_t *gfx, int event, int a, int b, int c);
 int do_bandwidth(struct field *f, cairo_t *gfx, int event, int a, int b, int c);
 
@@ -564,6 +567,7 @@ struct field main_controls[] = {
 	{"#cbtn_q", do_cmdbtn, 1000, -2000, 75, 45, "QUEUE", 1, "", FIELD_BUTTON, FONT_FIELD_VALUE,"", 0,0,0,FT8_CONTROL},
 	{"#cbtn_tone", do_cmdbtn, 1000, -2000, 70, 45, "TONE", 1, "", FIELD_BUTTON, FONT_FIELD_VALUE,"", 0,0,0,FT8_CONTROL},
 	{"#cbtn_ftb", do_cmdbtn, 1000, -2000, 50, 45, "FTBEST", 1, "", FIELD_BUTTON, FONT_FIELD_VALUE,"", 0,0,0,FT8_CONTROL},
+	{"#cbtn_cq", do_cmdbtn, 1000, -2000, 70, 45, "CQ", 1, "", FIELD_BUTTON, FONT_FIELD_VALUE,"", 0,0,0,FT8_CONTROL},
 	{"#logbook", NULL, 410, 50, 40, 40, "LOG", 1, "", FIELD_BUTTON, FONT_FIELD_VALUE,"", 0,0,0,COMMON_CONTROL}, 
 	{"#text_in", do_text, 5, 70, 285, 20, "TEXT", 70, "text box", FIELD_TEXT, FONT_LOG, 
 		"nothing valuable", 0,128,0,COMMON_CONTROL},
@@ -671,7 +675,7 @@ struct field main_controls[] = {
 
 	//FT8 controls
 	{"#ft8_auto", NULL, 1000, -1000, 50, 50, "FT8_AUTO", 40, "ON", FIELD_SELECTION, FONT_FIELD_VALUE, 
-		"ROBO/HUNT/ON/OFF", 0,0,0, FT8_CONTROL},
+		"CQ/ROBO/HUNT/ON/OFF", 0,0,0, FT8_CONTROL},
 	{"#ft8_tx1st", NULL, 1000, -1000, 50, 50, "FT8_TX1ST", 40, "ON", FIELD_TOGGLE, FONT_FIELD_VALUE, 
 		"ON/OFF", 0,0,0, FT8_CONTROL},
   { "#ft8_repeat", NULL, 1000, -1000, 50, 50, "FT8_REPEAT", 40, "5", FIELD_NUMBER, FONT_FIELD_VALUE,
@@ -1229,6 +1233,19 @@ int do_console(struct field *f, cairo_t *gfx, int event, int a, int b, int c){
 						cmd_armed_at = time(NULL);
 					}
 					return 1;
+				}
+				// QTAP: tap a queue line ("  BG7WJH  -12 +3 x2 t1 25s") to answer it
+				{	const char *qt = console_stream[console_selected_line].text;
+					char qc[16]; int qsnr;
+					if ((qt[0] == ' ' || qt[0] == '>') && strstr(qt, " x") && strstr(qt, " t")
+						&& sscanf(qt + 1, "%15s %d", qc, &qsnr) == 2
+						&& strlen(qc) >= 3 && strpbrk(qc, "0123456789")){
+						char qcmd[40];
+						sprintf(qcmd, "qreply %s", qc);
+						cmd_exec(qcmd);
+						f->is_dirty = 1;
+						return 1;
+					}
 				}
 				// SCANJUMP: tap a scan-report line ("7154.3 SSB (-2)") to tune to it
 				int skhz = 0, sfrac = 0;
@@ -2329,9 +2346,10 @@ static void layout_ui(){
 			field_move("F6", 300, -2000, 50, 45);
 			field_move("F7", 350, -2000, 50, 45);
 			field_move("F8", 400, -2000, 45, 45);
-			field_move("SILENT", 50, y2-47, 110, 45);
-			field_move("SKIP", 162, y2-47, 110, 45);
-			field_move("QUEUE", 274, y2-47, 110, 45);
+			field_move("CQ", 50, y2-47, 70, 45);
+			field_move("SILENT", 122, y2-47, 88, 45);
+			field_move("SKIP", 212, y2-47, 88, 45);
+			field_move("QUEUE", 302, y2-47, 88, 45);
 			field_move("FT8_REPEAT", 395, y2-47, 50, 45);
 			field_move("FTBEST", 447, y2-47, 50, 45);
 			field_move("FT8_AUTO", 499, y2-47, 50, 45);
@@ -3119,6 +3137,8 @@ int do_cmdbtn(struct field *f, cairo_t *gfx, int event, int a, int b, int c){
 			cmd_exec("skip");
 		else if (!strcmp(f->label, "QUEUE"))
 			cmd_exec("queue");
+		else if (!strcmp(f->label, "CQ"))
+			cmd_exec("cq");
 		else if (!strcmp(f->label, "TONE"))
 			cmd_exec("txbest");
 		else if (!strcmp(f->label, "FTBEST"))
@@ -5342,6 +5362,18 @@ void cmd_exec(char *cmd){
 		set_radio_mode(args);
 		update_field(get_field("r1:mode"));
 	}
+	else if (!strcmp(exec, "cq")){
+		ft8_cq_now();
+	}
+	else if (!strcmp(exec, "qreply")){
+		if (strlen(args))
+			hunt_reply_call(args);
+		else
+			write_console(FONT_LOG, "use: qreply CALLSIGN\n");
+	}
+	else if (!strcmp(exec, "swrclear")){
+		hunt_swr_clear();
+	}
 	else if (!strcmp(exec, "shutdown")){
 		write_console(FONT_LOG, "Shutting down - wait for the green LED to stop blinking\n");
 		save_user_settings(1);
@@ -5369,6 +5401,8 @@ void cmd_exec(char *cmd){
 			"CMD: span 25K - full waterfall\n"
 			"CMD: wf - toggle 3D waterfall\n"
 			"CMD: shutdown - power off the radio\n"
+			"CMD: cq - call CQ now\n"
+			"CMD: swrclear - clear SWR band blocks\n"
 			"CMD: screen off - blank screen\n"
 			"CMD: silent - mute all + screen\n"
 			"CMD: wake - restore all\n");

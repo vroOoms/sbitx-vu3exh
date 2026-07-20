@@ -672,7 +672,7 @@ void hunt_skip_current(){
 		hunt_tab[i].tries = 50; // not again today
 		hunt_day_save();
 	}
-	sprintf(note, "HUNT: skipping %s for this session\n", hunt_target);
+	sprintf(note, "SKIP: %s barred for today, next target from queue\n", hunt_target);
 	write_console(FONT_LOG, note);
 	hunt_target[0] = 0;
 	ft8_abort();
@@ -730,6 +730,76 @@ static void hunt_start(int hi){
 	write_console(FONT_LOG, note);
 	strcpy(line, hunt_tab[hi].line);
 	ft8_process(line, FT8_START_QSO);
+}
+
+// manual pick from the queue: answer this station now
+void hunt_reply_call(const char *call){
+	char c[16], n[100];
+	strncpy(c, call, 15); c[15] = 0;
+	for (char *p = c; *p; p++) *p = toupper(*p);
+	int hi = hunt_tab_find(c);
+	if (hi < 0 || !hunt_tab[hi].line[0]){
+		sprintf(n, "%s is not in the queue\n", c);
+		write_console(FONT_LOG, n);
+		return;
+	}
+	if (hunt_target[0] && strcmp(hunt_target, c)){
+		sprintf(n, "leaving %s for %s\n", hunt_target, c);
+		write_console(FONT_LOG, n);
+		hunt_target[0] = 0;
+		ft8_abort();
+		call_wipe();
+	}
+	if (hunt_tab[hi].tries >= 3)
+		hunt_tab[hi].tries = 0; // a manual pick overrides bars and backoff
+	hunt_start(hi);
+}
+
+void hunt_swr_clear(){
+	for (int i = 0; i < 8; i++)
+		swr_bad_until[i] = 0;
+	write_console(FONT_LOG, "SWR band blocks cleared - auto TX allowed again\n");
+}
+
+static int cq_auto_gap = 0;
+
+// build and schedule "CQ <mycall> <grid4>" on the clearest audio offset
+void ft8_cq_now(){
+	char msg[64], grid[8], ps[12];
+	strncpy(grid, field_str("MYGRID"), 4);
+	grid[4] = 0;
+	int p = txbest_pick();
+	if (p > 0){
+		sprintf(ps, "%d", p);
+		field_set("TX_PITCH", ps);
+	} else
+		p = atoi(field_str("TX_PITCH"));
+	sprintf(msg, "CQ %s %s", field_str("MYCALLSIGN"), grid);
+	ft8_tx(msg, p);
+}
+
+// queue as JSON for the web UI (served at /data/queue.json)
+static void hunt_queue_json(){
+	FILE *qf = fopen("/home/pi/sbitx/data/queue.json", "w");
+	if (!qf)
+		return;
+	time_t now = time(NULL);
+	int shown = 0;
+	fprintf(qf, "[");
+	for (int i = 0; i < hunt_tab_n && shown < 16; i++){
+		if (!hunt_tab[i].line[0] || hunt_tab[i].tries >= 90)
+			continue;
+		if (now - hunt_tab[i].last_heard > 300)
+			continue;
+		fprintf(qf, "%s{\"call\":\"%s\",\"snr\":%d,\"trend\":%d,\"heard\":%d,\"tries\":%d,\"age\":%ld,\"target\":%d}",
+			shown ? "," : "", hunt_tab[i].call, hunt_tab[i].last_snr,
+			hunt_tab[i].last_snr - hunt_tab[i].prev_snr, hunt_tab[i].heard,
+			hunt_tab[i].tries, (long)(now - hunt_tab[i].last_heard),
+			!strcmp(hunt_tab[i].call, hunt_target) ? 1 : 0);
+		shown++;
+	}
+	fprintf(qf, "]");
+	fclose(qf);
 }
 
 // after each decode batch: never waste a TX slot on a dead target
@@ -1400,9 +1470,21 @@ void ft8_poll(int seconds, int tx_is_on){
 	static int last_second = 0;
 	static int last_wd = -1;
 	ft8_hunt_active = hunt_mode_on();
+	int cq_mode = !strcmp(field_str("FT8_AUTO"), "CQ");
 	if (!tx_is_on && (seconds % 15) == 0 && seconds != last_wd){
 		last_wd = seconds;
-		if (ft8_hunt_active && strlen(field_str("CALL"))){
+		hunt_queue_json();
+		// CQ mode: call CQ when free, random 15-60s pause between calls;
+		// whoever answers is worked by the normal auto-respond machinery
+		if (cq_mode && !strlen(field_str("CALL")) && hunt_band_ok(freq_hdr)){
+			if (cq_auto_gap > 0)
+				cq_auto_gap--;
+			else {
+				ft8_cq_now();
+				cq_auto_gap = 1 + (rand() % 4);
+			}
+		}
+		if ((ft8_hunt_active || cq_mode) && strlen(field_str("CALL"))){
 			if (++hunt_qso_slots > hm_wd_slots()){
 				write_console(FONT_LOG, "HUNT: no reply, moving on\n");
 				if (hunt_target[0] && !hunt_got_reply)
@@ -1419,16 +1501,18 @@ void ft8_poll(int seconds, int tx_is_on){
 	//until we run out of ft8 sampels
 	if (tx_is_on){
 		static time_t swr_bad_since = 0;
+		static int tx_settled_vswr10 = 0;
 		if (fwdpower > tx_peak_pw10){ tx_peak_pw10 = fwdpower; tx_peak_vswr10 = vswr; }
+		if (fwdpower > 20 && vswr > 0) tx_settled_vswr10 = vswr;
 		// live SWR probe: the first seconds of every auto TX are the test.
 		// sustained SWR > 1.9 kills the transmission NOW, not at its end.
-		if (ft8_hunt_active && fwdpower > 20){ // >2W out: bridge reading is valid
+		if ((ft8_hunt_active || cq_mode) && fwdpower > 20){ // >2W out: bridge reading is valid
 			if (vswr > 19){
 				if (!swr_bad_since)
 					swr_bad_since = time(NULL);
-				else if (time(NULL) - swr_bad_since >= 2){
+				else if (time(NULL) - swr_bad_since >= 6){ // a tuner cycle may take a few s
 					char sn[90];
-					sprintf(sn, "SWR %d.%d high on %s - TX ABORTED, band blocked 1h\n",
+					sprintf(sn, "SWR %d.%d high on %s - TX ABORTED, band blocked 1h (swrclear undoes)\n",
 						vswr/10, vswr%10, band_tag_of(freq_hdr));
 					write_console(FONT_LOG, sn);
 					hunt_swr_bad_set(freq_hdr);
@@ -1456,15 +1540,17 @@ void ft8_poll(int seconds, int tx_is_on){
 				last_tx_vswr10 = tx_peak_vswr10;
 				ft8_log_csv("TXEND", freq_hdr, 0, 0, ft8_pitch, last_tx_pw10, last_tx_vswr10, ft8_tx_text);
 				tx_peak_pw10 = 0;
-				if (ft8_hunt_active && last_tx_vswr10 > 19){ //SWR safety for auto modes
-					char sn[80];
-					sprintf(sn, "SWR %d.%d high! auto TX stopped on %s for 1 hour\n",
-						last_tx_vswr10/10, last_tx_vswr10%10, band_tag_of(freq_hdr));
+				// settled end-of-TX SWR: a tuner's brief retune spikes are ignored
+				if ((ft8_hunt_active || cq_mode) && tx_settled_vswr10 > 19){
+					char sn[96];
+					sprintf(sn, "SWR %d.%d high! auto TX stopped on %s for 1h (swrclear undoes)\n",
+						tx_settled_vswr10/10, tx_settled_vswr10%10, band_tag_of(freq_hdr));
 					write_console(FONT_LOG, sn);
 					hunt_swr_bad_set(freq_hdr);
 					ft8_abort();
 					call_wipe();
 				}
+				tx_settled_vswr10 = 0;
 			}
 		}
 		return;
