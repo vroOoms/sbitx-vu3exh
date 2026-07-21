@@ -5391,6 +5391,17 @@ void cmd_exec(char *cmd){
 		set_radio_mode(args);
 		update_field(get_field("r1:mode"));
 	}
+	else if (!strcmp(exec, "net")){
+		char nl[160];
+		FILE *np = popen("ip -4 -br addr show 2>/dev/null | grep -v '^lo'; "
+			"/sbin/iwgetid -r 2>/dev/null | sed 's/^/wifi ssid: /'; "
+			"/sbin/iwgetid -f 2>/dev/null | grep -o 'Frequency.*' ", "r");
+		if (np){
+			while (fgets(nl, sizeof(nl), np))
+				write_console(FONT_LOG, nl);
+			pclose(np);
+		}
+	}
 	else if (!strcmp(exec, "cq")){
 		ft8_cq_now();
 	}
@@ -5432,6 +5443,7 @@ void cmd_exec(char *cmd){
 			"CMD: shutdown - power off the radio\n"
 			"CMD: cq - call CQ now\n"
 			"CMD: swrclear - clear SWR band blocks\n"
+			"CMD: net - network devices and IPs\n"
 			"CMD: screen off - blank screen\n"
 			"CMD: silent - mute all + screen\n"
 			"CMD: wake - restore all\n");

@@ -182,6 +182,7 @@ the web CMD panel needs no backslash):
 | `qreply CALL` | Answer a queued station by callsign |
 | `cq` | Send one CQ now |
 | `swrclear` | Lift the 1-hour SWR band blocks (after your antenna tuner retunes) |
+| `net` | Show network devices and IPs — wlan0 (WiFi), eth0 (wire), the connected SSID. The taskbar icon's hover popup clips off-screen; this is the readable version |
 | `ignored` | Stations blacklisted for ignoring us |
 | `skip` | Abort current hunter target, bar it for today |
 | `ftbest` | Live FT8 activity per band + where your signal is heard |
