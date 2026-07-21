@@ -1475,6 +1475,20 @@ void ft8_poll(int seconds, int tx_is_on){
 	ft8_hunt_active = hunt_mode_on();
 	const char *fa_str = field_str("FT8_AUTO");
 	int cq_mode = fa_str && (!strcmp(fa_str, "CQ") || !strcmp(fa_str, "CQHUNT"));
+	// the FT8 tone has no business on the speaker: mute AUDIO for the
+	// duration of every transmission, restore the moment it ends
+	static int tx_audio_saved = -1;
+	if (tx_is_on){
+		if (tx_audio_saved < 0){
+			tx_audio_saved = atoi(field_str("AUDIO"));
+			field_set("AUDIO", "0");
+		}
+	} else if (tx_audio_saved >= 0){
+		char ab[12];
+		sprintf(ab, "%d", tx_audio_saved);
+		field_set("AUDIO", ab);
+		tx_audio_saved = -1;
+	}
 	if (!tx_is_on && (seconds % 15) == 0 && seconds != last_wd){
 		last_wd = seconds;
 		hunt_queue_json();

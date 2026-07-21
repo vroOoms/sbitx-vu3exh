@@ -4598,6 +4598,9 @@ gboolean ui_tick(gpointer gook){
 		char sr[20];
 		field_set("SIDETONE", "30"); //TX monitor volume always starts at 30
 		sdr_request("sidetone=30", sr);
+		// auto modes never survive a power-up: transmitting is a decision,
+		// not a leftover state - turn HUNT/CQ/ROBO back on manually
+		field_set("FT8_AUTO", "OFF");
 	}
 	static int session_marked = 0;
 	if (!session_marked && ticks >= 60){ //one-shot: session marker for the log browser

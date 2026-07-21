@@ -283,6 +283,12 @@ Kill switch: `echo 0 > data/bmask.txt`.
   confirm rule.
 - Switching MODE away from FT8 wipes any queued auto-TX so the new mode
   starts clean (fixes the stuck UI after mode changes).
+- **AUTO always powers up OFF.** Transmitting is a decision, not a
+  leftover state: after every restart the radio only listens until you
+  pick HUNT/CQ/CQHUNT/ROBO yourself.
+- **The speaker is muted during every FT8 transmission** (AUDIO is
+  saved, set to 0, and restored when the TX ends) - no more screaming
+  tone. SIDETONE still controls the CW monitor.
 - **SIDETONE** field = speaker volume during FT8/CW TX. Always starts at 30
   after a restart (hardcoded); adjust live any time, 0 is silent.
 - Waking a blanked screen: touch it — that touch also *clicks*, so touch an
