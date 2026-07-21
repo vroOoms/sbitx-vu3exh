@@ -87,6 +87,7 @@ static void ft8_log_csv(const char *dir, int fq, int score, int snr, int pitch, 
 #endif
 // ---- HUNT: auto-answer CQs; ROBO adds auto band-hopping (see robo_tick in sbitx_gtk.c) ----
 int ft8_hunt_active = 0;              // cached: FT8_AUTO is HUNT or ROBO
+static char ft8_pending_qso[256] = ""; // START_QSO parked while we transmit
 #define HUNT_MAX 512
 static struct { char call[14]; int tries; time_t next_ok;
 	int last_snr, prev_snr, heard; time_t last_heard; char line[80]; } hunt_tab[HUNT_MAX];
@@ -588,7 +589,7 @@ int hunt_skipped(const char *call){
 
 static int hunt_mode_on(){
 	const char *s = field_str("FT8_AUTO");
-	return s && (!strcmp(s, "HUNT") || !strcmp(s, "ROBO"));
+	return s && (!strcmp(s, "HUNT") || !strcmp(s, "ROBO") || !strcmp(s, "CQHUNT"));
 }
 
 // every decoded line: watch our target (fading? gone with someone else?)
@@ -747,8 +748,10 @@ void hunt_reply_call(const char *call){
 		sprintf(n, "leaving %s for %s\n", hunt_target, c);
 		write_console(FONT_LOG, n);
 		hunt_target[0] = 0;
-		ft8_abort();
-		call_wipe();
+		if (!is_in_tx()){ // mid-TX: the parked request cleans up after TX
+			ft8_abort();
+			call_wipe();
+		}
 	}
 	if (hunt_tab[hi].tries >= 3)
 		hunt_tab[hi].tries = 0; // a manual pick overrides bars and backoff
@@ -1470,7 +1473,8 @@ void ft8_poll(int seconds, int tx_is_on){
 	static int last_second = 0;
 	static int last_wd = -1;
 	ft8_hunt_active = hunt_mode_on();
-	int cq_mode = !strcmp(field_str("FT8_AUTO"), "CQ");
+	const char *fa_str = field_str("FT8_AUTO");
+	int cq_mode = fa_str && (!strcmp(fa_str, "CQ") || !strcmp(fa_str, "CQHUNT"));
 	if (!tx_is_on && (seconds % 15) == 0 && seconds != last_wd){
 		last_wd = seconds;
 		hunt_queue_json();
@@ -1551,6 +1555,12 @@ void ft8_poll(int seconds, int tx_is_on){
 					call_wipe();
 				}
 				tx_settled_vswr10 = 0;
+				if (ft8_pending_qso[0]){ // a request parked during this TX
+					char pq[256];
+					strcpy(pq, ft8_pending_qso);
+					ft8_pending_qso[0] = 0;
+					ft8_process(pq, FT8_START_QSO);
+				}
 			}
 		}
 		return;
@@ -1654,6 +1664,16 @@ int ft8_message_tokenize(char *message){
 // as a reply to someone's cq or as a 'break' with signal report to
 // a concluding qso
 void ft8_on_start_qso(char *message){
+	if (is_in_tx()){
+		// never cut an active transmission: park this request, it fires
+		// the moment the current TX completes. The latest request wins.
+		strncpy(ft8_pending_qso, message, 255);
+		ft8_pending_qso[255] = 0;
+		char pn[120];
+		snprintf(pn, sizeof(pn), "queued for next slot: %.80s\n", message);
+		write_console(FONT_LOG, pn);
+		return;
+	}
 	modem_abort();
 	tx_off();
 	call_wipe();
@@ -1806,4 +1826,5 @@ void ft8_init(){
 void ft8_abort(){
 	ft8_tx_nsamples = 0;
 	ft8_repeat = 0;
+	ft8_pending_qso[0] = 0;
 }

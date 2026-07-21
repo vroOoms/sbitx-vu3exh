@@ -465,6 +465,7 @@ int do_cmdbtn(struct field *f, cairo_t *gfx, int event, int a, int b, int c);
 void ft8_cq_now(void);
 void hunt_reply_call(const char *call);
 void hunt_swr_clear(void);
+void ft8_abort(void);
 int do_record(struct field *f, cairo_t *gfx, int event, int a, int b, int c);
 int do_bandwidth(struct field *f, cairo_t *gfx, int event, int a, int b, int c);
 
@@ -675,7 +676,7 @@ struct field main_controls[] = {
 
 	//FT8 controls
 	{"#ft8_auto", NULL, 1000, -1000, 50, 50, "FT8_AUTO", 40, "ON", FIELD_SELECTION, FONT_FIELD_VALUE, 
-		"CQ/ROBO/HUNT/ON/OFF", 0,0,0, FT8_CONTROL},
+		"CQ/CQHUNT/ROBO/HUNT/ON/OFF", 0,0,0, FT8_CONTROL},
 	{"#ft8_tx1st", NULL, 1000, -1000, 50, 50, "FT8_TX1ST", 40, "ON", FIELD_TOGGLE, FONT_FIELD_VALUE, 
 		"ON/OFF", 0,0,0, FT8_CONTROL},
   { "#ft8_repeat", NULL, 1000, -1000, 50, 50, "FT8_REPEAT", 40, "5", FIELD_NUMBER, FONT_FIELD_VALUE,
@@ -2352,7 +2353,7 @@ static void layout_ui(){
 			field_move("QUEUE", 302, y2-47, 88, 45);
 			field_move("FT8_REPEAT", 395, y2-47, 50, 45);
 			field_move("FTBEST", 447, y2-47, 50, 45);
-			field_move("FT8_AUTO", 499, y2-47, 50, 45);
+			field_move("FT8_AUTO", 499, y2-47, 52, 45);
 			field_move("TONE", 551, y2-47, 70, 45);
 			field_move("SIDETONE", 623, y2-47, 70, 45);
 		break;
@@ -4704,13 +4705,38 @@ gboolean ui_tick(gpointer gook){
 		update_field(f);
 		update_titlebar();
 
-		if (digitalRead(ENC1_SW) == 0){
-			//flip between mode and volume
-			if (f_focus && !strcmp(f_focus->label, "AUDIO"))
-				focus_field(get_field("r1:mode"));
-			else
-				focus_field(get_field("r1:volume"));
-			printf("Focus is on %s\n", f_focus->label);
+		{	// ENC1 press: in FT8 the knob drives the console - first press
+			// focuses it (rotate = move highlight), next press taps the line
+			static int sw1_last = 1;
+			static unsigned int sw1_at = 0;
+			int sw1 = digitalRead(ENC1_SW);
+			if (sw1 == 0 && sw1_last != 0 && millis() - sw1_at > 400){
+				sw1_at = millis();
+				if (!strcmp(get_field("r1:mode")->value, "FT8")){
+					struct field *cf = get_field("#console");
+					if (f_focus != cf)
+						focus_field(cf);
+					else
+						do_console(cf, NULL, GDK_BUTTON_RELEASE, 0, 0, 0);
+				}
+				else if (f_focus && !strcmp(f_focus->label, "AUDIO"))
+					focus_field(get_field("r1:mode"));
+				else
+					focus_field(get_field("r1:volume"));
+			}
+			sw1_last = sw1;
+		}
+		{	// leaving FT8 wipes queued auto-TX state (mode-change hang fix)
+			static char prev_mode[12] = "";
+			const char *cmnow = get_field("r1:mode")->value;
+			if (strcmp(cmnow, prev_mode)){
+				if (!strcmp(prev_mode, "FT8")){
+					ft8_abort();
+					call_wipe();
+				}
+				strncpy(prev_mode, cmnow, 11);
+				prev_mode[11] = 0;
+			}
 		}
 		
 		if (digitalRead(ENC2_SW) == 0)

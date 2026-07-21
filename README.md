@@ -81,6 +81,11 @@ stations' CQs (that's HUNT). SWR-blocked / non-allowed bands stop it.
 The `CQ` button on the FT8 screen sends **one manual CQ** any time, in
 any AUTO setting.
 
+### CQHUNT — both directions at once
+Calls CQ whenever the queue is empty and the radio is idle, **and** hunts
+other stations' CQs the moment they appear. The busiest mode: one sitting
+works both the answers to your CQ and the band's callers.
+
 **Kill switches:** tap `AUTO` to OFF, or the `skip` command to abort just the
 current target, or `abort` to stop any transmission immediately.
 
@@ -265,6 +270,19 @@ Kill switch: `echo 0 > data/bmask.txt`.
 
 ## 9. Good to know
 
+- **An active transmission is never cut.** Tapping another decode or
+  queue entry, `qreply`, or the auto-responder picking a station while a
+  transmission is on air no longer aborts it mid-flight: the request is
+  parked ("queued for next slot: ...") and fires the moment the TX
+  completes. The latest request wins. Only the SWR guard and `abort`/ESC
+  still stop a transmission instantly.
+- **Knob control of the lists (FT8):** press the small function knob once
+  to focus the console, **rotate to move the highlight, press again to
+  act on the line** — identical to tapping it (answer a queue entry, run
+  a menu command, reply to a decode). `CMD:` lines keep the two-press
+  confirm rule.
+- Switching MODE away from FT8 wipes any queued auto-TX so the new mode
+  starts clean (fixes the stuck UI after mode changes).
 - **SIDETONE** field = speaker volume during FT8/CW TX. Always starts at 30
   after a restart (hardcoded); adjust live any time, 0 is silent.
 - Waking a blanked screen: touch it — that touch also *clicks*, so touch an
