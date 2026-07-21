@@ -2648,6 +2648,13 @@ time_t time_sbitx(){
 // setting the frequency is complicated by having to take care of the
 // rit/split and power levels associated with each frequency
 void set_operating_freq(int dial_freq, char *response){
+	// FT8 transmissions are sacred: no dial moves mid-TX (knob bumps and
+	// stray taps used to shift the LO and cut the signal for the receiver)
+	if (in_tx && !strcmp(get_field("r1:mode")->value, "FT8")){
+		strcpy(response, "no QSY during TX");
+		write_console(FONT_LOG, "dial locked during TX\n");
+		return;
+	}
 	struct field *rit = get_field("#rit");
 	struct field *split = get_field("#split");
 	struct field *vfo_a = get_field("#vfo_a_freq");

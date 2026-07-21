@@ -39,6 +39,7 @@ static pthread_t ft8_thread;
 static int ft8_tx1st = 1;
 void ft8_tx(char *message, int freq);
 void ft8_process(char *message, int operation);
+static time_t ft8_tx_sched_at = 0;   // when a TX was last scheduled
 
 // BANDTAG: label every FT8 RX/TX console line with the band it happened on,
 // and print a banner line whenever the dial moves (band/freq history in the log)
@@ -816,7 +817,9 @@ static void hunt_pick(){
 		// never cut our own transmission mid-flight: the slot is already
 		// spent and a truncated FT8 burst decodes for no one. The busy/
 		// fading evidence stays sticky and the switch runs after TX ends.
-		if (hunt_target[0] && !is_in_tx()){
+		// hold the switch while a TX is on air OR scheduled-but-not-yet
+		// keyed (a slot about to be spent must complete either way)
+		if (hunt_target[0] && !is_in_tx() && time(NULL) - ft8_tx_sched_at > 20){
 			if (hunt_target_busy){
 				char note[80];
 				sprintf(note, "HUNT: %s went with another station, next!\n", hunt_target);
@@ -1377,6 +1380,7 @@ void ft8_tx(char *message, int freq){
 	strcpy(ft8_tx_text, message);
 
 	ft8_pitch = freq;
+	ft8_tx_sched_at = time(NULL);
   bandtag_banner();
   sprintf(buff, "%02d%02d%02d %s TX +00 %04d ~ %s\n", t->tm_hour, t->tm_min, t->tm_sec, band_tag_of(freq_hdr), ft8_pitch, ft8_tx_text);
 	write_console(FONT_FT8_QUEUED, buff);

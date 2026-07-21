@@ -271,6 +271,9 @@ Kill switch: `echo 0 > data/bmask.txt`.
 
 ## 9. Good to know
 
+- **The dial is locked while transmitting FT8** — knob bumps and stray
+  taps used to move the LO mid-transmission, cutting the signal for the
+  receiving station ("dial locked during TX" appears instead).
 - **An active transmission is never cut.** Tapping another decode or
   queue entry, `qreply`, or the auto-responder picking a station while a
   transmission is on air no longer aborts it mid-flight: the request is
