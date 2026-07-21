@@ -88,6 +88,7 @@ static void ft8_log_csv(const char *dir, int fq, int score, int snr, int pitch, 
 // ---- HUNT: auto-answer CQs; ROBO adds auto band-hopping (see robo_tick in sbitx_gtk.c) ----
 int ft8_hunt_active = 0;              // cached: FT8_AUTO is HUNT or ROBO
 static char ft8_pending_qso[256] = ""; // START_QSO parked while we transmit
+void sdr_request(char *request, char *response);
 #define HUNT_MAX 512
 static struct { char call[14]; int tries; time_t next_ok;
 	int last_snr, prev_snr, heard; time_t last_heard; char line[80]; } hunt_tab[HUNT_MAX];
@@ -1482,11 +1483,15 @@ void ft8_poll(int seconds, int tx_is_on){
 		if (tx_audio_saved < 0){
 			tx_audio_saved = atoi(field_str("AUDIO"));
 			field_set("AUDIO", "0");
+			char sr[24];
+			sdr_request("sidetone=0", sr); // the tone is DSP sidetone, not volume
 		}
 	} else if (tx_audio_saved >= 0){
-		char ab[12];
+		char ab[12], sb[28], sr[24];
 		sprintf(ab, "%d", tx_audio_saved);
 		field_set("AUDIO", ab);
+		sprintf(sb, "sidetone=%d", atoi(field_str("SIDETONE")));
+		sdr_request(sb, sr);
 		tx_audio_saved = -1;
 	}
 	if (!tx_is_on && (seconds % 15) == 0 && seconds != last_wd){
