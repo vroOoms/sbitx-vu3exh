@@ -1705,7 +1705,7 @@ void draw_tx_meters(struct field *f, cairo_t *gfx){
 
 // ---- 3D waterfall: perspective ridgelines, newest sweep at the front ----
 #define WF3_ROWS 48
-#define WF3_PTS 120
+#define WF3_PTS 200
 static unsigned char wf3_hist[WF3_ROWS][WF3_PTS];
 static int wf3_head = 0;
 static int wf3_mode = -1;   // -1 = read data/wf_mode.txt on first draw
@@ -1754,9 +1754,8 @@ static int wf3_last_render = 0;
 static int wf3_last_row = 0;
 
 static void wf3_render(struct field *f){
-	// capture this sweep; stretch against the live noise floor so a
-	// signal 25 units up is already a white peak (SDR-Console contrast)
-	unsigned char raw[WF3_PTS];
+	// capture: subtract the live noise floor so the floor lies FLAT and
+	// only real signals rise - the texture soup was hiding the signals
 	int base[WF3_PTS];
 	long s = 0;
 	for (int p = 0; p < WF3_PTS; p++){
@@ -1764,15 +1763,18 @@ static void wf3_render(struct field *f){
 		base[p] = wf[i] * 2;
 		s += base[p];
 	}
-	int nf = (int)(s / WF3_PTS);
+	int mean = (int)(s / WF3_PTS);
+	long s2 = 0; int n2 = 0;
+	for (int p = 0; p < WF3_PTS; p++)
+		if (base[p] <= mean){ s2 += base[p]; n2++; }
+	int nf = n2 ? (int)(s2 / n2) : mean;
+	unsigned char raw[WF3_PTS];
 	for (int p = 0; p < WF3_PTS; p++){
-		int v = (base[p] - nf) * 3 + 14;
+		int v = (base[p] - nf - 3) * 4;
 		if (v > 100) v = 100;
 		if (v < 0) v = 0;
 		raw[p] = v;
 	}
-	// a new history row only every 400ms (so 48 rows span ~19s);
-	// in between, peak-hold this sweep into the front row
 	int nowr = millis();
 	unsigned char *nr = wf3_hist[wf3_head];
 	if (nowr - wf3_last_row >= 400){
@@ -1791,33 +1793,46 @@ static void wf3_render(struct field *f){
 
 	cairo_t *cg = cairo_create(wf3_surf);
 	cairo_set_antialias(cg, CAIRO_ANTIALIAS_NONE);
-	cairo_set_source_rgb(cg, 0, 0, 0);
+	cairo_set_source_rgb(cg, 0.01, 0.02, 0.05);
 	cairo_paint(cg);
 
 	double W = wf3_sw, H = wf3_sh;
-	double hmax = H * 0.45;
+	double scaleh = 22;              // room for the frequency scale
+	double baseY = H - scaleh;
 	static double xs[2][WF3_PTS], ys[2][WF3_PTS];
 	int cur = 0;
-	// solid surface, painted back to front: each cell is a filled quad
-	// between the previous sweep's edge and this one's
+	double fx0 = 0, fusable = W;     // front row geometry for the scale
 	for (int k = 0; k < WF3_ROWS; k++){
 		unsigned char *row = wf3_hist[(wf3_head + 1 + k) % WF3_ROWS];
-		double t = (double)k / (WF3_ROWS - 1);   // 0 = far/oldest, 1 = front
-		double sc = 0.70 + 0.30 * t;
-		double cx = W * 0.5 + W * 0.055 * (1.0 - t);
-		double yb = 12 + t * (H - 16);
-		double hh = hmax * (0.55 + 0.45 * t) / 100.0;
+		double t = (double)k / (WF3_ROWS - 1);   // 0 = far, 1 = front
+		double usable = W * (0.55 + 0.45 * t);
+		double x0 = (W - usable) * 0.5 + W * 0.10 * (1.0 - t); // skew right
+		double yb = 6 + t * (baseY - 6);
+		double hh = (H * 0.62) * (0.40 + 0.60 * t) / 100.0;
 		for (int p = 0; p < WF3_PTS; p++){
-			xs[cur][p] = cx + (((double)p / (WF3_PTS - 1)) - 0.5) * sc * W;
+			xs[cur][p] = x0 + (p * usable) / (WF3_PTS - 1);
 			ys[cur][p] = yb - row[p] * hh;
 		}
+		if (k == WF3_ROWS - 1){ fx0 = x0; fusable = usable; }
 		if (k){
 			int back = 1 - cur;
+			double depth = 0.30 + 0.70 * t;   // near rows brighter
 			for (int p = 0; p + 1 < WF3_PTS; p++){
 				int v = row[p] > row[p+1] ? row[p] : row[p+1];
-				double r2, g2, b2;
-				wf3_shade(v, t, &r2, &g2, &b2);
-				cairo_set_source_rgb(cg, r2, g2, b2);
+				double r, g, b;
+				if (v <= 4){          // the flat floor: dark blue carpet
+					r = 0.05; g = 0.09; b = 0.20;
+				} else if (v < 35){   // weak: teal -> cyan
+					double u = (v - 4) / 31.0;
+					r = 0.02; g = 0.35 + 0.45*u; b = 0.45 + 0.35*u;
+				} else if (v < 70){   // medium: cyan -> yellow
+					double u = (v - 35) / 35.0;
+					r = 0.9*u; g = 0.80; b = 0.80 * (1.0 - u);
+				} else {              // strong: yellow -> white-hot
+					double u = (v - 70) / 30.0;
+					r = 0.9 + 0.1*u; g = 0.80 + 0.2*u; b = 0.9*u;
+				}
+				cairo_set_source_rgb(cg, r*depth, g*depth, b*depth);
 				cairo_move_to(cg, xs[back][p], ys[back][p]);
 				cairo_line_to(cg, xs[back][p+1], ys[back][p+1]);
 				cairo_line_to(cg, xs[cur][p+1], ys[cur][p+1]);
@@ -1827,6 +1842,40 @@ static void wf3_render(struct field *f){
 			}
 		}
 		cur = 1 - cur;
+	}
+	// frequency scale along the front edge, dial at the center mark
+	{
+		double span = 25000;
+		const char *sp = field_str("SPAN");
+		if (sp && atof(sp) > 0) span = atof(sp) * 1000;
+		cairo_set_antialias(cg, CAIRO_ANTIALIAS_DEFAULT);
+		cairo_select_font_face(cg, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+		cairo_set_font_size(cg, 11);
+		cairo_set_line_width(cg, 1);
+		cairo_set_source_rgb(cg, 0.35, 0.45, 0.55);
+		cairo_move_to(cg, fx0, baseY + 2);
+		cairo_line_to(cg, fx0 + fusable, baseY + 2);
+		cairo_stroke(cg);
+		for (int kk = -2; kk <= 2; kk++){
+			double off = kk * 5000.0;
+			if (2.0 * off > span || 2.0 * off < -span) continue;
+			double x = fx0 + (0.5 + off / span) * fusable;
+			if (kk == 0)
+				cairo_set_source_rgb(cg, 0.2, 0.9, 0.2);
+			else
+				cairo_set_source_rgb(cg, 0.35, 0.45, 0.55);
+			cairo_move_to(cg, x, baseY + 2);
+			cairo_line_to(cg, x, baseY + 8);
+			cairo_stroke(cg);
+			char lb[16];
+			if (kk == 0)
+				sprintf(lb, "DIAL");
+			else
+				sprintf(lb, "%+dk", kk * 5);
+			cairo_set_source_rgb(cg, kk == 0 ? 0.2 : 0.5, kk == 0 ? 0.9 : 0.6, kk == 0 ? 0.2 : 0.7);
+			cairo_move_to(cg, x - 12, baseY + 19);
+			cairo_show_text(cg, lb);
+		}
 	}
 	cairo_destroy(cg);
 }
