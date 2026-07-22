@@ -2647,10 +2647,14 @@ time_t time_sbitx(){
 
 // setting the frequency is complicated by having to take care of the
 // rit/split and power levels associated with each frequency
+static int tx_locked_dial = 0;   // the dial the current TX keyed on
+
 void set_operating_freq(int dial_freq, char *response){
-	// FT8 transmissions are sacred: no dial moves mid-TX (knob bumps and
-	// stray taps used to shift the LO and cut the signal for the receiver)
-	if (in_tx && !strcmp(get_field("r1:mode")->value, "FT8")){
+	// FT8 transmissions are sacred: no dial CHANGES mid-TX (knob bumps and
+	// stray taps shift the LO and cut the signal for the receiver). The
+	// radio's own tx_on/tx_off re-programming passes the SAME dial - allowed.
+	if (in_tx && tx_locked_dial && dial_freq != tx_locked_dial
+		&& !strcmp(get_field("r1:mode")->value, "FT8")){
 		strcpy(response, "no QSY during TX");
 		write_console(FONT_LOG, "dial locked during TX\n");
 		return;
@@ -3370,6 +3374,7 @@ void tx_on(int trigger){
 		in_tx = trigger; //can be PTT or softswitch
 		char response[20];
 		struct field *freq = get_field("r1:freq");
+		tx_locked_dial = atoi(freq->value); //freeze the dial for this TX
 		set_operating_freq(atoi(freq->value), response);
 		update_field(get_field("r1:freq"));
 		printf("TX\n");
@@ -3387,6 +3392,7 @@ void tx_off(){
 		sdr_request("tx=off", response);	
 		in_tx = 0;
 		sdr_request("key=up", response);
+		tx_locked_dial = 0; //unlock: this restore may legitimately QSY
 		char response[20];
 		struct field *freq = get_field("r1:freq");
 		set_operating_freq(atoi(freq->value), response);

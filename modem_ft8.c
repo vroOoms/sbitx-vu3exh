@@ -1601,9 +1601,15 @@ void ft8_poll(int seconds, int tx_is_on){
 			(seconds >=30 && seconds < 45))) ||
 		(ft8_tx1st == 0 && ((seconds >= 15 && seconds < 30)|| 
 			(seconds >= 45 && seconds < 59)))){
-		tx_on(TX_SOFT);
-		ft8_start_tx(seconds % 15);
-		ft8_repeat--;
+		// key only near the slot start: joining deep into the slot
+		// transmits just the tail of the message - undecodable, and the
+		// attempt is wasted (the "TX that stops right after starting").
+		// Too late? The repeat stays pending for our next parity slot.
+		if ((seconds % 15) < 3){
+			tx_on(TX_SOFT);
+			ft8_start_tx(seconds % 15);
+			ft8_repeat--;
+		}
 	} 
 }
 
