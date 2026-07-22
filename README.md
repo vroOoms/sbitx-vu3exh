@@ -24,6 +24,25 @@ Two ways to use it:
    **My grid** button. Files are parsed entirely in your browser —
    nothing is uploaded anywhere.
 
+## Screenshots
+
+| | |
+|---|---|
+| ![FT8 hunter screen](docs/img/ft8-hunter.jpg) | ![3D waterfall](docs/img/3d-waterfall.jpg) |
+| The FT8 screen: color-coded decodes, hunter queue, command buttons | 3D terrain waterfall (toggle with the `3D` button) |
+| ![Transmit view](docs/img/tx-view.jpg) | ![Band scan](docs/img/net-command.jpg) |
+| Transmitting: live power and SWR | `net` and the command console |
+| ![Map dashboard](docs/img/map-dashboard.png) | ![Logs report](docs/img/logs-report.png) |
+| Web map dashboard: contacts and receptions with replay | Web logs: filters, sessions, reports |
+
+## Upstream bugs found on the way
+
+Building all this surfaced a number of bugs in stock
+[afarhan/sbitx](https://github.com/afarhan/sbitx) — from a repo that
+doesn't compile (missing `oled.h`) to FT8 transmissions that key up and
+stop after one second. The full list with symptoms, root causes and
+fixes: **[UPSTREAM-BUGS.md](UPSTREAM-BUGS.md)**.
+
 Everything works from two places:
 - **The radio's touchscreen** — fields, taps and the `KBD` command line.
 - **The web UI** — `http://<radio-ip>:8080` (passkey login). Same information,
