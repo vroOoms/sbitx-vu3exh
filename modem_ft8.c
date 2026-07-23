@@ -13,6 +13,9 @@
 #include <unistd.h>
 #include "sdr.h"
 #include "sdr_ui.h"
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include "modem_ft8.h"
 
 #include "ft8_lib/common/common.h"
@@ -1761,6 +1764,37 @@ void *ft8_thread_function(void *ptr){
 
 // the ft8 sampling is at 12000, the incoming samples are at
 // 96000 samples/sec
+// ---- RX audio tap ----------------------------------------------------
+// Streams the same 12 kHz demodulated samples the internal FT8 decoder
+// consumes, over UDP to the audio bridge. The ALSA loopback the stock
+// firmware writes (plughw:1,0) is opened non-blocking and drops samples:
+// audio captured from it will not decode even with the radio's own
+// decoder, which is why WSJT-X on a networked computer sees a live
+// waterfall but never decodes anything.
+static int rxtap_fd = -1;
+static struct sockaddr_in rxtap_addr;
+static short rxtap_buf[600];
+static int rxtap_n = 0;
+
+static void rxtap_send(int32_t s){
+	if (rxtap_fd == -1){
+		// SOCK_NONBLOCK: never stall the audio thread on a full socket
+		rxtap_fd = socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK, 0);
+		if (rxtap_fd == -1)
+			return;
+		memset(&rxtap_addr, 0, sizeof(rxtap_addr));
+		rxtap_addr.sin_family = AF_INET;
+		rxtap_addr.sin_port = htons(8083);
+		rxtap_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+	}
+	rxtap_buf[rxtap_n++] = (short)(s >> 13);
+	if (rxtap_n >= 600){
+		sendto(rxtap_fd, rxtap_buf, rxtap_n * 2, 0,
+			(struct sockaddr *)&rxtap_addr, sizeof(rxtap_addr));
+		rxtap_n = 0;
+	}
+}
+
 static void wspr_rx_tap(int32_t s){
 	if (wspr_capturing && wspr_rx_buf && wspr_rx_idx < WSPR_RX_SAMPLES)
 		wspr_rx_buf[wspr_rx_idx++] = (short)(s >> 13); // full 16-bit headroom
@@ -1780,6 +1814,7 @@ void ft8_rx(int32_t *samples, int count){
 	for (int i = 0; i < count; i += decimation_ratio){
 		ft8_rx_buffer[ft8_rx_buff_index++] = samples[i] / 200000000.0f;
 		wspr_rx_tap(samples[i]);
+		rxtap_send(samples[i]);
 	}
 
 	int now = time_sbitx();

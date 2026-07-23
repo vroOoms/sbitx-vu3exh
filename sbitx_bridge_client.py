@@ -8,7 +8,7 @@
 #   python3 sbitx_bridge_client.py --device "BlackHole 2ch"
 #
 # Default stream: http://192.168.0.108:8082/rx
-import argparse, sys, urllib.request
+import argparse, struct, sys, urllib.request
 
 def main():
     ap = argparse.ArgumentParser()
@@ -23,9 +23,10 @@ def main():
         sys.exit("pip install sounddevice   (then rerun)")
     if args.list:
         print(sd.query_devices()); return
-    rate = 48000
     r = urllib.request.urlopen(args.url, timeout=10)
-    r.read(44)  # WAV header
+    hdr = r.read(44)                       # take the rate from the stream
+    rate = struct.unpack('<I', hdr[24:28])[0]
+    print('stream rate: %d Hz' % rate)
     out = sd.RawOutputStream(samplerate=rate, channels=1, dtype='int16',
         device=args.device)
     out.start()

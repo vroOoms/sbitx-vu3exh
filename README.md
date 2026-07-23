@@ -233,6 +233,12 @@ the work):
 2. **RX audio, no cables** — the radio streams its receiver audio:
    - quick listen from anything: open `http://192.168.0.108:8082/rx`
      in VLC or a browser;
+   - the stream is 48 kHz (WSJT-X's required rate), upsampled from the
+     radio's internal 12 kHz receive tap - the same samples its own FT8
+     decoder uses. The ALSA loopback stock firmware provides is *not*
+     usable for this: audio captured from it does not decode (verified
+     with WSJT-X's own jt9 against a simultaneous tap capture that
+     decoded four messages).
    - for WSJT-X: install a virtual audio device (**BlackHole** on
      macOS, **VB-Cable** on Windows), download the bridge client from
      `http://192.168.0.108:8080/sbitx_bridge_client.py`, then
