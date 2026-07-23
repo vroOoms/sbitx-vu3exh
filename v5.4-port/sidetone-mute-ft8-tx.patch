@@ -1,0 +1,19 @@
+--- sbitx.c.sidetonebak	2026-07-24 04:09:25.441450815 +0530
++++ sbitx.c	2026-07-24 04:09:25.486707117 +0530
+@@ -2116,8 +2116,14 @@
+ 		}
+ 		else
+ 		{
+-			// If not in voice modes, use the sidetone
+-			output_speaker[j] = i_sample * sidetone;
++			// CW/CWR: keep the sidetone (you want to hear your keying).
++			// FT8/FT4/digital: DO NOT blast the transmit tone from the
++			// speaker - mute it, but honour TXMON if the user wants to
++			// monitor (same behaviour as the voice modes above).
++			if (r->mode == MODE_CW || r->mode == MODE_CWR)
++				output_speaker[j] = i_sample * sidetone;
++			else
++				output_speaker[j] = i_sample * txmon_control_level * 1000000000.0;
+ 			q_sample = 0;
+ 		}
+ 
