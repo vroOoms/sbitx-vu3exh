@@ -9,29 +9,9 @@
 import array, socket, struct, threading, queue
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-TAP_RATE = 12000
-RATE = 48000        # WSJT-X requires 48 kHz input
+RATE = 12000        # the raw tap rate; clients resample if they need 48k
 clients = []
 clients_lock = threading.Lock()
-
-_last = [0]
-
-def upsample(data):
-    """12 kHz tap -> 48 kHz for WSJT-X, linear interpolation (x4)."""
-    src = array.array('h', data)
-    out = array.array('h', bytes(len(src) * 8))
-    prev = _last[0]
-    j = 0
-    for v in src:
-        d = v - prev
-        out[j]     = prev + (d >> 2)
-        out[j + 1] = prev + (d >> 1)
-        out[j + 2] = prev + ((3 * d) >> 2)
-        out[j + 3] = v
-        prev = v
-        j += 4
-    _last[0] = prev
-    return out.tobytes()
 
 def udp_reader():
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -39,7 +19,6 @@ def udp_reader():
     s.bind(('127.0.0.1', 8083))
     while True:
         data, _ = s.recvfrom(4096)
-        data = upsample(data)
         with clients_lock:
             for q in clients:
                 try:
@@ -60,7 +39,7 @@ class H(BaseHTTPRequestHandler):
         hdr = struct.pack('<4sI4s4sIHHIIHH4sI', b'RIFF', 0xFFFFFFFF,
             b'WAVE', b'fmt ', 16, 1, 1, RATE, RATE * 2, 2, 16,
             b'data', 0xFFFFFFFF)
-        q = queue.Queue(maxsize=200)
+        q = queue.Queue(maxsize=6)    # ~300ms: drop stale audio rather than lag
         with clients_lock:
             clients.append(q)
         try:
@@ -78,5 +57,5 @@ class H(BaseHTTPRequestHandler):
         pass
 
 threading.Thread(target=udp_reader, daemon=True).start()
-print("sBITX audio bridge on :8082  (/rx, %d Hz tap -> %d Hz stream)" % (TAP_RATE, RATE))
+print("sBITX audio bridge on :8082  (/rx, %d Hz from the RX tap)" % RATE)
 ThreadingHTTPServer(('0.0.0.0', 8082), H).serve_forever()
