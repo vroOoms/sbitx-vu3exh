@@ -185,8 +185,16 @@ void interpret_command(char *cmd){
     close(data_socket);
     data_socket = -1;
   }
-	else 
+  else if (check_cmd(cmd, "\\get_level"))
+    send_response("0\n");         // levels we do not model
+  else if (check_cmd(cmd, "\\set_level"))
+    send_response("RPRT 0\n");
+	else {
+		// never stay silent: a client waiting for a reply that never comes
+		// hangs (this is what made Test CAT appear to do nothing)
 		printf("Hamlib: Unrecognized command [%s] '%c'\n", cmd, cmd[0]);
+		send_response("RPRT -1\n");
+	}
 }
 
 void hamlib_handler(char *data, int len){
@@ -250,10 +258,19 @@ void hamlib_slice(){
     fcntl(data_socket, F_SETFL, fcntl(data_socket, F_GETFL) | O_NONBLOCK);
   }
   else { 
-    len = recv(data_socket, buffer, sizeof(buffer), 0);
-    if (len >= 0){
+    len = recv(data_socket, buffer, sizeof(buffer) - 1, 0);
+    if (len > 0){
       buffer[len] = 0;
       hamlib_handler(buffer, len);
+    }
+    else if (len == 0){
+      // the peer closed: recv() returns 0. Treating that as data left
+      // this single client slot occupied forever, so every later client
+      // (WSJT-X's Test CAT, gpredict, rigctl) connected to a dead
+      // server and hung with no reply.
+      puts("Hamlib client disconnected, listening again ...");
+      close(data_socket);
+      data_socket = -1;
     }
     else {
       //e = errno();
