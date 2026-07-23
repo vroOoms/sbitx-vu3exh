@@ -78,6 +78,16 @@ isolated enough to upstream directly.
     forward power live during the transmission; FT8's clipped
     full-power behavior is left as the (universal) status quo.
 
+20. **The ALSA loopback audio does not decode.** Stock firmware writes
+    the receive audio to `plughw:1,0` so other software can use it, but
+    audio captured from that loopback yields zero FT8 decodes, while a
+    capture of the internal 12 kHz stream taken at the same moment
+    yields four (checked with WSJT-X's own `jt9`). The loopback handle
+    is opened `SND_PCM_NONBLOCK` and drops samples. Worse, if anything
+    else holds the loopback when sbitx starts, `sound_start_loopback_play`
+    fails and the whole sound thread returns - the radio comes up with
+    no receive at all and no visible error.
+
 19. **rigctl serves exactly one client, ever.** The single client slot
     is never released because `recv()` returning 0 - the peer closing
     the connection - is treated as valid data (`len >= 0`). After the
