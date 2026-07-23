@@ -1646,6 +1646,8 @@ void sdr_request(char *request, char *response){
 			rx_list->mode = MODE_FT8;
 		else if (!strcmp(value, "WSPR"))
 			rx_list->mode = MODE_FT8; // same DSP chain as FT8
+		else if (!strcmp(value, "FT4"))
+			rx_list->mode = MODE_FT8; // same DSP chain as FT8
 		else if (!strcmp(value, "AM"))
 			rx_list->mode = MODE_AM;
 		else

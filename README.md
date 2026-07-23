@@ -181,6 +181,14 @@ Colors (same on device and web):
 tap still selects. The web lists scroll natively and every row is clickable
 to answer.
 
+## 4a2. FT4 — contest-speed FT8
+
+Set **MODE = FT4** (device or web; tune to an FT4 frequency, e.g.
+14.080). Everything from the FT8 world carries over unchanged — the
+hunter, CQ/CQHUNT, the queue, colors, logging, RR73 fast exchanges —
+at **7.5-second slots**: twice the QSO rate. The decode timestamps
+round to the 15 s pair (cosmetic).
+
 ## 4b. WSPR — a real mode
 
 Set **MODE = WSPR** (device or web). The radio QSYs to the band's WSPR

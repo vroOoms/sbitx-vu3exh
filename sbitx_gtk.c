@@ -545,7 +545,7 @@ struct field main_controls[] = {
 		"", 50, 5000, 50,COMMON_CONTROL},
 
 	{ "r1:mode", NULL, 5, 5, 40, 40, "MODE", 40, "USB", FIELD_SELECTION, FONT_FIELD_VALUE, 
-		"USB/LSB/CW/CWR/FT8/WSPR/AM/DIGITAL/2TONE", 0,0,0, COMMON_CONTROL},
+		"USB/LSB/CW/CWR/FT8/FT4/WSPR/AM/DIGITAL/2TONE", 0,0,0, COMMON_CONTROL},
 
 	/* logger controls */
 
@@ -1400,6 +1400,8 @@ static int mode_id(const char *mode_str){
 		return MODE_CWR;
 	else if (!strcmp(mode_str, "WSPR"))
 		return MODE_FT8; // WSPR rides the FT8 DSP chain
+	else if (!strcmp(mode_str, "FT4"))
+		return MODE_FT8; // FT4 rides the FT8 DSP chain
 	else if (!strcmp(mode_str, "USB"))
 		return MODE_USB;
 	else if (!strcmp(mode_str,  "LSB"))
@@ -4818,7 +4820,7 @@ gboolean ui_tick(gpointer gook){
 			static char prev_mode[12] = "";
 			const char *cmnow = get_field("r1:mode")->value;
 			if (strcmp(cmnow, prev_mode)){
-				if (!strcmp(prev_mode, "FT8") || !strcmp(prev_mode, "WSPR")){
+				if (!strcmp(prev_mode, "FT8") || !strcmp(prev_mode, "WSPR") || !strcmp(prev_mode, "FT4")){
 					ft8_abort();
 					call_wipe();
 				}

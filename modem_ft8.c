@@ -89,6 +89,8 @@ static void ft8_log_csv(const char *dir, int fq, int score, int snr, int pitch, 
 // ---- HUNT: auto-answer CQs; ROBO adds auto band-hopping (see robo_tick in sbitx_gtk.c) ----
 int ft8_hunt_active = 0;              // cached: FT8_AUTO is HUNT or ROBO
 static char ft8_pending_qso[256] = ""; // START_QSO parked while we transmit
+static int ft4_active = 0;           // MODE == FT4 (cached at 1 Hz)
+static int ft8_decode_is_ft8 = 1;    // protocol of the chunk being decoded
 static char last_rr73_call[16] = "";   // who we closed with RR73 (for repeats)
 static time_t last_rr73_at = 0;
 
@@ -1679,8 +1681,11 @@ static void ft8_start_tx(int offset_seconds){
 	write_console(FONT_FT8_TX, buff);
 	ft8_log_csv("TX", freq_hdr, 0, 0, ft8_pitch, 0, 0, ft8_tx_text);
 
-	ft8_tx_nsamples = sbitx_ft8_encode(ft8_tx_text, ft8_pitch, ft8_tx_buff, false); 
-	ft8_tx_buff_index = offset_seconds * 96000;
+	ft8_tx_nsamples = sbitx_ft8_encode(ft8_tx_text, ft8_pitch, ft8_tx_buff, ft4_active != 0);
+	if (ft4_active)
+		ft8_tx_buff_index = 86400; // skip 0.9s of lead silence: tones land ~0.3s into the half-slot
+	else
+		ft8_tx_buff_index = offset_seconds * 96000;
 }
 
 // the ft8_tx() only schedules the transmission
@@ -1747,7 +1752,7 @@ void *ft8_thread_function(void *ptr){
 			continue;
 
 		ft8_do_decode = 0;
-		sbitx_ft8_decode(ft8_rx_buffer, ft8_rx_buff_index, true);
+		sbitx_ft8_decode(ft8_rx_buffer, ft8_rx_buff_index, ft8_decode_is_ft8 != 0);
 		hunt_pick();
 		//let the next batch begin
 		ft8_rx_buff_index = 0;
@@ -1784,17 +1789,36 @@ void ft8_rx(int32_t *samples, int count){
 		return;
 
 	int slot_second = wallclock % 15;
-	if (slot_second == 0){
+	if (slot_second == 0 && !ft4_active){
 		ft8_rx_buff_index = 0;
 		ft8_slot_freq = freq_hdr; //the band this slot's audio is captured on
+	}
+	if (ft4_active){
+		// FT4: 7.5s chunks, clocked by the sample counter itself
+		if (slot_second == 0 && ft8_rx_buff_index > 100000)
+			ft8_rx_buff_index = 0; // re-align at a true boundary
+		if (ft8_rx_buff_index >= 90000){
+			ft8_decode_freq = ft8_slot_freq ? ft8_slot_freq : freq_hdr;
+			ft8_slot_freq = freq_hdr;
+			if (!wspr_active){
+				ft8_decode_is_ft8 = 0;
+				ft8_do_decode = 1;
+
+			}
+			else
+				ft8_rx_buff_index = 0;
+		}
+		return;
 	}
 
 //	printf("ft8 decoding trigger index %d, slot_second %d\n", ft8_rx_buff_index, slot_second);
 	//we should have atleast 12 seconds of samples to decode
 	if (ft8_rx_buff_index >= 13 * 12000 && slot_second > 13){
 		ft8_decode_freq = ft8_slot_freq ? ft8_slot_freq : freq_hdr;
-		if (!wspr_active)
-			ft8_do_decode = 1; // WSPR owns the receiver
+		if (!wspr_active){
+			ft8_decode_is_ft8 = 1;
+			ft8_do_decode = 1;
+		}
 		else
 			ft8_rx_buff_index = 0;
 	}
@@ -1807,6 +1831,7 @@ void ft8_poll(int seconds, int tx_is_on){
 	const char *fa_str = field_str("FT8_AUTO");
 	int cq_mode = fa_str && (!strcmp(fa_str, "CQ") || !strcmp(fa_str, "CQHUNT"));
 	wspr_tick(tx_is_on);
+	ft4_active = !strcmp(field_str("MODE"), "FT4");
 	// the FT8 tone has no business on the speaker: mute AUDIO for the
 	// duration of every transmission, restore the moment it ends
 	static int tx_audio_saved = -1;
@@ -1959,7 +1984,15 @@ void ft8_poll(int seconds, int tx_is_on){
 	//we are here only if we are rx-ing and we have a pending transmission 
 	last_second = seconds = seconds % 60;
 
-	if (
+	if (ft4_active){
+		int s15 = seconds % 15;
+		if ((ft8_tx1st == 1 && s15 == 0) || (ft8_tx1st == 0 && s15 == 8)){
+			tx_on(TX_SOFT);
+			ft8_start_tx(0);
+			ft8_repeat--;
+		}
+	}
+	else if (
 		(ft8_tx1st == 1 && ((seconds >= 0  && seconds < 15) ||
 			(seconds >=30 && seconds < 45))) ||
 		(ft8_tx1st == 0 && ((seconds >= 15 && seconds < 30)|| 
@@ -2076,7 +2109,14 @@ void ft8_on_start_qso(char *message){
 	//for cq message that started on 0 or 30th second, use the 15 or 45 and
 	//vice versa
 	int msg_second = msg_time % 100; 	
-	if (msg_second < 15 || (msg_second >= 30 && msg_second < 45))
+	if (ft4_active){
+		// FT4 half-slots: they sent in one 7.5s half, we answer in the other
+		if ((msg_second % 15) < 8)
+			ft8_tx1st = 0;
+		else
+			ft8_tx1st = 1;
+	}
+	else if (msg_second < 15 || (msg_second >= 30 && msg_second < 45))
 		ft8_tx1st = 0; //we tx on 2nd and 4ht slots for msgs on 1st and 3rd
 	else
 		ft8_tx1st = 1;
