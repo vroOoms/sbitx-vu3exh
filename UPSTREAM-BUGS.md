@@ -78,6 +78,14 @@ isolated enough to upstream directly.
     forward power live during the transmission; FT8's clipped
     full-power behavior is left as the (universal) status quo.
 
+19. **rigctl serves exactly one client, ever.** The single client slot
+    is never released because `recv()` returning 0 - the peer closing
+    the connection - is treated as valid data (`len >= 0`). After the
+    first client disconnects, every later client connects to a server
+    that never answers: the classic "hamlib worked once, now Test CAT
+    does nothing". Unrecognized commands are also answered with
+    silence, which hangs clients waiting for a reply.
+
 18. **rigctl (port 4532) is unreachable from the network and hangs
     clients mid-handshake.** The server binds `127.0.0.1`, so every
     remote CAT client - WSJT-X, gpredict, rigctl on a laptop - gets
