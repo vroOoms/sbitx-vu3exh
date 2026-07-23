@@ -52,7 +52,7 @@ Everything works from two places:
 
 ## 1. The AUTO modes — what the radio does on its own
 
-The `AUTO` field (FT8 screen / web dropdown) has four settings. Each level
+The `AUTO` field cycles OFF → ON → HUNT → CQ → CQHUNT → ROBO. Each level
 includes everything above it.
 
 ### OFF — fully manual
@@ -140,6 +140,22 @@ none of them stop you tapping a decode manually.
 
 Normal completes the most QSOs per attempt; hyper works the most stations
 per hour on a busy band at the cost of more abandoned calls.
+
+## 3b. Fast exchanges (airtime diet)
+
+The radio runs the shortest legal FT8 exchange:
+
+- **CQ answers carry your report, not your grid** — the grid roundtrip
+  (one full 30 s cycle) is skipped; their grid already arrived with the
+  CQ. A minimal hunted QSO is now 2 transmissions from your side.
+- **RR73 replaces RRR + 73** — roger and goodbye in one transmission,
+  and the QSO is logged the moment it goes out.
+- **No courtesy 73 after receiving RR73** — everything is already
+  acked. An RRR still gets its needed 73, and a station that repeats
+  RR73 (insisting on a 73) gets one.
+- Lost-message recovery: if your RR73 didn't arrive and they repeat
+  their R-report, the radio re-closes with RR73 without reopening the
+  QSO.
 
 ## 4. Reading the screen
 

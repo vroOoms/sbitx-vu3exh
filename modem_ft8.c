@@ -89,6 +89,8 @@ static void ft8_log_csv(const char *dir, int fq, int score, int snr, int pitch, 
 // ---- HUNT: auto-answer CQs; ROBO adds auto band-hopping (see robo_tick in sbitx_gtk.c) ----
 int ft8_hunt_active = 0;              // cached: FT8_AUTO is HUNT or ROBO
 static char ft8_pending_qso[256] = ""; // START_QSO parked while we transmit
+static char last_rr73_call[16] = "";   // who we closed with RR73 (for repeats)
+static time_t last_rr73_at = 0;
 void sdr_request(char *request, char *response);
 #define HUNT_MAX 512
 static struct { char call[14]; int tries; time_t next_ok;
@@ -1404,7 +1406,8 @@ void ft8_tx(char *message, int freq){
 
 	//no repeat for '73'
 	int msg_length = strlen(message);
-	if (msg_length > 3 && !strcmp(message + msg_length - 3, " 73")){
+	if (msg_length > 3 && (!strcmp(message + msg_length - 3, " 73")
+		|| (msg_length > 5 && !strcmp(message + msg_length - 5, " RR73")))){
 		ft8_repeat = 1;
 	} 
 	else
@@ -1726,7 +1729,11 @@ void ft8_on_start_qso(char *message){
 			field_set("EXCH", m3);
 			field_set("SENT", signal_strength);
 		}
-		sprintf(reply_message, "%s %s %s", call, mycall, mygrid);
+		{	// answer with the report directly - skips the grid roundtrip,
+			// one full 30s cycle less per QSO (their grid came with the CQ)
+			int rsnr = atoi(signal_strength);
+			sprintf(reply_message, "%s %s %+03d", call, mycall, rsnr);
+		}
 	}
 	//whoa, someone cold called us
 	else if (!strcmp(m1, mycall)){
@@ -1753,19 +1760,35 @@ void ft8_on_start_qso(char *message){
 }
 
 void ft8_on_signal_report(){
+	int closed = 0;
 	field_set("CALL", m2);
 	if (m3[0] == 'R'){
 		//skip the 'R'
 		field_set("RECV", m3+1);
-		sprintf(reply_message, "%s %s RRR", call, mycall);  	
+		// RR73 instead of RRR: roger + 73 in one transmission, and the
+		// QSO is complete on our side the moment it goes out
+		sprintf(reply_message, "%s %s RR73", call, mycall);
 		ft8_tx(reply_message, tx_pitch);
+		strncpy(last_rr73_call, m2, 15);
+		last_rr73_call[15] = 0;
+		last_rr73_at = time(NULL);
+		hunt_mark_worked(m2);
+		ign_clear(m2);
+		hunt_target[0] = 0;
+		closed = 1;
 	}
 	else{ 
 		field_set("RECV", m3);	
 		sprintf(reply_message, "%s %s R%s", call, mycall, report_send);  	
 		ft8_tx(reply_message, tx_pitch);
 	}
-	enter_qso();
+	// log only when the QSO closes (our RR73) - the answerer side gets
+	// logged when their RR73/RRR arrives; logging at R-report time gave
+	// every QSO two rows
+	if (closed){
+		enter_qso();
+		call_wipe(); // frees the hunter for the next station immediately
+	}
 }
 
 void ft8_process(char *message, int operation){
@@ -1795,7 +1818,8 @@ void ft8_process(char *message, int operation){
 	}
 
 	// see if you are on auto responder, the logger is empty and we are the called party
-	if (auto_respond && !strlen(call) && !strcmp(m1, mycall)){
+	if (auto_respond && !strlen(call) && !strcmp(m1, mycall)
+		&& strcmp(m3, "RR73") && strcmp(m3, "RRR") && strcmp(m3, "73")){
 		ft8_on_start_qso(message);
 		return;
 	}
@@ -1823,14 +1847,37 @@ void ft8_process(char *message, int operation){
 	//this maybe arriving after we have cleared the log
 	//we don't check it against any fields of the logger
 	if (!strcmp(m3, "RR73") || !strcmp(m3, "RRR")){
-		sprintf(reply_message, "%s %s 73", m2, mycall);	
-		ft8_tx(reply_message, tx_pitch); 
+		if (!strcmp(m3, "RRR")
+			|| (!strcmp(m2, last_rr73_call) && time(NULL) - last_rr73_at < 180)){
+			// an RRR needs the closing 73; a REPEATED RR73 means they
+			// insist on one - send it
+			sprintf(reply_message, "%s %s 73", m2, mycall);	
+			ft8_tx(reply_message, tx_pitch);
+		} else {
+			// first RR73: everything is acked, skip the courtesy 73 -
+			// one less transmission on the air per QSO. Also cancel any
+			// still-pending repeat of our R-report.
+			strncpy(last_rr73_call, m2, 15);
+			last_rr73_call[15] = 0;
+			last_rr73_at = time(NULL);
+			ft8_repeat = 0;
+		}
 		hunt_target[0] = 0;
 		ign_clear(m2);
 		hunt_mark_worked(m2);
-		enter_qso();
+		if (strlen(call) && !strcmp(call, m2))
+			enter_qso(); // log once, and only if this QSO is still open
 		call_wipe();
 		ft8_repeat = 1;
+	}
+	// our RR73 may have been lost: they repeat the R-report after we
+	// cleared the logger - close again without reopening the QSO
+	if (!strlen(call) && m3[0] == 'R' && (m3[1] == '-' || m3[1] == '+')
+		&& !strcmp(m2, last_rr73_call) && time(NULL) - last_rr73_at < 180){
+		sprintf(reply_message, "%s %s RR73", m2, mycall);
+		ft8_tx(reply_message, tx_pitch);
+		last_rr73_at = time(NULL);
+		return;
 	}	
 	
 	//beyond this point, we need to have a call filled up in the logger

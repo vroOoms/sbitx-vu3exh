@@ -676,7 +676,7 @@ struct field main_controls[] = {
 
 	//FT8 controls
 	{"#ft8_auto", NULL, 1000, -1000, 50, 50, "FT8_AUTO", 40, "ON", FIELD_SELECTION, FONT_FIELD_VALUE, 
-		"CQ/CQHUNT/ROBO/HUNT/ON/OFF", 0,0,0, FT8_CONTROL},
+		"OFF/ON/HUNT/CQ/CQHUNT/ROBO", 0,0,0, FT8_CONTROL},
 	{"#ft8_tx1st", NULL, 1000, -1000, 50, 50, "FT8_TX1ST", 40, "ON", FIELD_TOGGLE, FONT_FIELD_VALUE, 
 		"ON/OFF", 0,0,0, FT8_CONTROL},
   { "#ft8_repeat", NULL, 1000, -1000, 50, 50, "FT8_REPEAT", 40, "5", FIELD_NUMBER, FONT_FIELD_VALUE,
@@ -4505,8 +4505,8 @@ static int robo_wait = 0;
 void robo_request(int manual){
 	char rcmd[420];
 	sprintf(rcmd,
-		"curl -s --max-time 12 'https://pskreporter.info/cgi-bin/psk-freq.pl?mode=FT8' -o /tmp/pskfreq.txt.tmp 2>/dev/null && mv /tmp/pskfreq.txt.tmp /tmp/pskfreq.txt; "
-		"curl -s --max-time 12 'https://retrieve.pskreporter.info/query?senderCallsign=%s&flowStartSeconds=-900&rronly=1' -o /tmp/pskr_mine.xml.tmp 2>/dev/null && mv /tmp/pskr_mine.xml.tmp /tmp/pskr_mine.xml &",
+		"( curl -s --max-time 12 'https://pskreporter.info/cgi-bin/psk-freq.pl?mode=FT8' -o /tmp/pskfreq.txt.tmp 2>/dev/null && mv /tmp/pskfreq.txt.tmp /tmp/pskfreq.txt; "
+		"curl -s --max-time 12 'https://retrieve.pskreporter.info/query?senderCallsign=%s&flowStartSeconds=-900&rronly=1' -o /tmp/pskr_mine.xml.tmp 2>/dev/null && mv /tmp/pskr_mine.xml.tmp /tmp/pskr_mine.xml ) &",
 		get_field("#mycallsign")->value);
 	system(rcmd);
 	robo_wait = 20;   // parsed ~20s later by robo_tick (1 Hz)
