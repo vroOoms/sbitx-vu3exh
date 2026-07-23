@@ -9,6 +9,7 @@ WSJTX-Improved do them better).
 - **Decoder tuning** — kMin_score 10→5, kMax_candidates 120→400,
   kLDPC_iterations 20→30, kTime_osr 2→4. Catches weak signals the stock
   settings miss (took our decode from 54% → 79% of WSJT-X).
+- **Decode window widened** — f_max 3000→5000 Hz, catches FT8 stations at the sub-band edge in crowded conditions (matches WSJT-X's wider window). Verified: decodes a synthetic 3500 Hz signal that f_max=3000 misses.
 - **Multi-pass subtraction** — decode, re-encode each message, subtract
   it, re-search the residue. Finds weak signals masked by strong ones;
   in testing the sBitx found messages even WSJT-X missed.

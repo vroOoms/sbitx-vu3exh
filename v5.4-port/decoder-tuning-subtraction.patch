@@ -1,5 +1,5 @@
 --- modem_ft8.c.stockbak	2026-07-24 02:24:41.961744716 +0530
-+++ modem_ft8.c	2026-07-24 02:54:40.229383653 +0530
++++ modem_ft8.c	2026-07-24 03:55:30.289175234 +0530
 @@ -67,14 +67,15 @@
  // This file should change less often; if a new country is omitted, we simply won't abbreviate its name.
  static const char* abbrev_location = "clu/share/clu/abbrev.tsv";
@@ -58,6 +58,15 @@
  static int sbitx_ft8_decode(float *signal, int num_samples)
  {
      int sample_rate = 12000;
+@@ -631,7 +663,7 @@
+     monitor_t mon;
+     monitor_config_t mon_cfg = {
+         .f_min = 100,
+-        .f_max = 3000,
++        .f_max = 5000, // widened from 3000: catch FT8 stations at the sub-band edge (crowded conditions)
+         .sample_rate = sample_rate,
+         .time_osr = kTime_osr,
+         .freq_osr = kFreq_osr,
 @@ -662,20 +694,11 @@
  	double mylat, mylon;
  	bool myloc_ok = !locator2longlat(&mylon, &mylat, mygrid);
