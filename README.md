@@ -226,8 +226,10 @@ hardware (their decoders are too heavy for the Pi, your computer does
 the work):
 
 1. **CAT**: WSJT-X → Settings → Radio: Rig = `Hamlib NET rigctl`,
-   Network Server = `192.168.0.108:4532`, PTT Method = CAT,
-   Mode = None, Split = None.
+   Network Server = `<radio-ip>:4532`, PTT Method = CAT, Mode = None,
+   Split = None. (Stock firmware binds this port to localhost only and
+   leaves the bare `m` query unanswered, so remote clients get
+   Connection refused or hang in Test CAT - both fixed here.)
 2. **RX audio, no cables** — the radio streams its receiver audio:
    - quick listen from anything: open `http://192.168.0.108:8082/rx`
      in VLC or a browser;
@@ -237,6 +239,9 @@ the work):
      `pip install sounddevice` and
      `python3 sbitx_bridge_client.py --device "BlackHole 2ch"` —
      set WSJT-X's *Input* to the virtual device.
+   - **autostart**: `sbitx_autostart.sh` (wired into the desktop
+     session) launches both the radio and the bridge after a boot,
+     guarded so a manual launch never double-starts them.
    - the bridge server runs on the radio:
      `python3 /home/pi/sbitx/audio_bridge.py` (add
      `@reboot /usr/bin/python3 /home/pi/sbitx/audio_bridge.py` to

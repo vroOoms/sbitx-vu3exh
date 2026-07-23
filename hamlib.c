@@ -152,6 +152,16 @@ void interpret_command(char *cmd){
 		send_response("USB\n3000\n");
   else if (!strncmp(cmd, "m VFOA", 6))
     send_response("USB\n3000\n");
+  // a bare 'm' (no VFO argument) is what WSJT-X and rigctl send; leaving
+  // it unanswered hangs the client mid-handshake
+  else if (!strcmp(cmd, "m"))
+    send_response("USB\n3000\n");
+  else if (cmd[0] == 'M')          // set mode: accept and acknowledge
+    send_response("RPRT 0\n");
+  else if (check_cmd(cmd, "\\get_powerstat"))
+    send_response("1\n");
+  else if (check_cmd(cmd, "\\set_powerstat"))
+    send_response("RPRT 0\n");
   else if (check_cmd(cmd, "f"))
 		send_freq();
   else if (check_cmd(cmd, "F"))
@@ -205,7 +215,13 @@ void hamlib_start(){
   
   serverAddr.sin_family = AF_INET;
   serverAddr.sin_port = htons(4532);
-  serverAddr.sin_addr.s_addr = inet_addr("127.0.0.1");
+  // listen on all interfaces: bound to 127.0.0.1 the rigctl port
+  // refuses every remote client (WSJT-X, gpredict, rigctl on a laptop)
+  serverAddr.sin_addr.s_addr = htonl(INADDR_ANY);
+  {
+    int reuse = 1;
+    setsockopt(welcome_socket, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+  }
   memset(serverAddr.sin_zero, '\0', sizeof serverAddr.sin_zero);  
 
   /*---- Bind the address struct to the socket ----*/
