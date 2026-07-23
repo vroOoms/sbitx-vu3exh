@@ -652,6 +652,7 @@ int sound_loop(){
   }
 	//fclose(pf);
   printf("********Ending sound thread\n");
+  return 0;
 }
 
 
@@ -703,6 +704,7 @@ int loopback_loop(){
 
   }
   printf("********Ending loopback thread\n");
+  return 0;
 }
 
 /*
@@ -735,6 +737,7 @@ void *sound_thread_function(void *ptr){
 	sound_thread_continue = 1;
 	sound_loop();
 	sound_stop();
+	return NULL;
 }
 
 void *loopback_thread_function(void *ptr){
@@ -753,6 +756,7 @@ void *loopback_thread_function(void *ptr){
 	sound_thread_continue = 1;
 	loopback_loop();
 	sound_stop();
+	return NULL;
 }
 
 int sound_thread_start(char *device){
@@ -762,6 +766,7 @@ int sound_thread_start(char *device){
 	pthread_create( &sound_thread, NULL, sound_thread_function, (void*)device);
 	sleep(1);
 	pthread_create( &loopback_thread, NULL, loopback_thread_function, (void*)device);
+	return 0;
 }
 
 void sound_thread_stop(){

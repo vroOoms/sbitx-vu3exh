@@ -221,6 +221,7 @@ void *telnet_thread_function(void *server){
 	}
 	close(telnet_sock);
 	telnet_sock = -1;	
+	return NULL;
 }
 
 int telnet_write(char *text){
@@ -230,6 +231,7 @@ int telnet_write(char *text){
 	char nl[] = "\n";
 	send (telnet_sock, text, strlen(text), 0);
 	send (telnet_sock, nl, strlen(nl), 0);
+	return 0;
 }
 
 void telnet_close(){

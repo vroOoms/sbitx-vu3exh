@@ -466,6 +466,7 @@ void ft8_cq_now(void);
 void hunt_reply_call(const char *call);
 void hunt_swr_clear(void);
 void ft8_abort(void);
+void set_operating_freq(int dial_freq, char *response);
 void wspr_ctl(const char *args);
 void wspr_selftest(void);
 int do_record(struct field *f, cairo_t *gfx, int event, int a, int b, int c);
@@ -914,6 +915,7 @@ int field_set(const char *label, const char *new_value){
 		return -1;
 	int r = set_field(f->cmd, new_value); 
 	update_field(f);
+	return r;
 }
 
 int get_field_value(char *cmd, char *value){
@@ -2174,6 +2176,7 @@ int waterfall_fn(struct field *f, cairo_t *gfx, int event, int a, int b){
 			draw_waterfall(f, gfx);
 			break;
 	}
+	return 0;
 }
 
 char* freq_with_separators(const char* freq_str){
@@ -2718,8 +2721,9 @@ static void focus_field(struct field *f){
 }
 
 time_t time_sbitx(){
-	if (time_delta)
-		return time(NULL);
+	// time_delta is the NTP-vs-monotonic offset; either way the radio runs
+	// on system time. Falling off the end here returned a garbage clock.
+	return time(NULL);
 }
 
 
@@ -3496,6 +3500,7 @@ static int layout_handler(void* user, const char* section,
 		f->width = atoi(value);
 	else if (!strcmp(name, "height"))
 		f->height = atoi(value);	
+	return 1;   // inih: non-zero means the line was handled
 }
 
 void set_ui(int id){
@@ -3552,7 +3557,7 @@ static gboolean on_key_release (GtkWidget *widget, GdkEventKey *event, gpointer 
 	if (event->keyval == MIN_KEY_TAB){
 		tx_off();
   }
-
+	return FALSE;
 }
 
 static gboolean on_key_press (GtkWidget *widget, GdkEventKey *event, gpointer user_data) {
@@ -3685,12 +3690,13 @@ static gboolean on_scroll (GtkWidget *widget, GdkEventScroll *event, gpointer da
       }
    }
 	}
-		
+	return FALSE;
 }
 
 
 static gboolean on_window_state (GtkWidget *widget, GdkEventKey *event, gpointer user_data) {
 	mouse_down = 0;
+	return FALSE;
 }
 
 static gboolean on_mouse_release (GtkWidget *widget, GdkEventButton *event, gpointer data) {
@@ -4057,7 +4063,7 @@ void oled_update(){
 	
 	mode = field_str("MODE");
 	char *q = buff + strlen(buff);
-	strncpy(q, p, 5);
+	strncpy(q, mode ? mode : "", 5);   // was an uninitialised pointer
 	*(q + 5) = 0; 
 	strcat(buff, "\n>Audio:");
 	p = field_str("AUDIO");

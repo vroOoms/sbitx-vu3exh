@@ -13,6 +13,8 @@
 #include <unistd.h>
 #include "sdr.h"
 #include "sdr_ui.h"
+#include <wiringPi.h>          /* millis() */
+int hunt_band_ok(int f);      /* defined below, used before its definition */
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>

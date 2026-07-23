@@ -306,6 +306,7 @@ int export_adif(char *path, char *start_date, char *end_date){
 	}
 	sqlite3_finalize(stmt);
 	fclose(pf);
+	return 0;
 }
 
 /* Export functions */
@@ -676,6 +677,7 @@ int logbook_fill(int from_id, int count, char *query){
 		callsign, rst_sent, exchange_sent, rst_recv, exchange_recv, comments);
 	}
 	sqlite3_finalize(stmt);
+	return 0;
 }
 
 void clear_tree(GtkListStore *list_store) {
