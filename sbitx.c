@@ -90,6 +90,52 @@ static int rx_gain = 100;
 int rx_nr = 0;                 /* noise reduction 0..100 (0=off) */
 int rx_anf = 0;                /* auto-notch 0/1 */
 int rx_rnnoise = 0;            /* AI (RNNoise) NR 0/1 */
+int rx_anotch = 0;             /* LMS auto-notch 0/1 */
+int rx_nb = 0;                 /* noise blanker threshold, 0 = off */
+
+/* ---- LMS auto-notch -------------------------------------------------
+   An adaptive predictor: a steady carrier is predictable from its own
+   past, speech is not. The filter learns to predict the input and we
+   keep the *error*, which removes tones and leaves the voice. Kills
+   heterodynes without touching audio the way a fixed notch would. */
+#define ANOTCH_TAPS 48
+static float an_w[ANOTCH_TAPS];
+static float an_hist[ANOTCH_TAPS];
+static int an_pos = 0;
+
+static float anotch_process(float x){
+	an_hist[an_pos] = x;
+	float y = 0, pw = 1e-6f;
+	for (int i = 0; i < ANOTCH_TAPS; i++){
+		float s = an_hist[(an_pos + 1 + i) % ANOTCH_TAPS]; // delayed history
+		y += an_w[i] * s;
+		pw += s * s;
+	}
+	float e = x - y;                    // error = what could not be predicted
+	float mu = 0.004f / pw;             // normalised LMS step
+	for (int i = 0; i < ANOTCH_TAPS; i++){
+		float s = an_hist[(an_pos + 1 + i) % ANOTCH_TAPS];
+		an_w[i] += mu * e * s;
+	}
+	an_pos = (an_pos + 1) % ANOTCH_TAPS;
+	return e;
+}
+
+/* ---- noise blanker --------------------------------------------------
+   Impulse noise (ignition, switching supplies) is short and far above
+   the running average. Samples beyond threshold x average are replaced
+   by the local average rather than clipped, which avoids the splatter
+   a hard limiter creates. */
+static float nb_avg = 0;
+
+static int32_t nb_process(int32_t s, int thresh_pct){
+	float a = fabsf((float)s);
+	nb_avg = 0.999f * nb_avg + 0.001f * a;
+	float limit = nb_avg * (1.0f + thresh_pct / 10.0f);
+	if (nb_avg > 1.0f && a > limit)
+		return (int32_t)(s > 0 ? nb_avg : -nb_avg);
+	return s;
+}
 static DenoiseState *rnn_st = NULL;
 #define RNN_Q 4096
 static float rnn_acc[480]; static int rnn_acc_n = 0;
@@ -967,6 +1013,16 @@ void rx_linear(int32_t *input_rx,  int32_t *input_mic,
 				output_tx[i] = 0;
 			}
 
+		/* noise blanker and auto-notch: voice modes only, before RNNoise */
+		if ((rx_nb || rx_anotch) && (r->mode==MODE_USB || r->mode==MODE_LSB || r->mode==MODE_AM)){
+			for (int k = 0; k < MAX_BINS/2; k++){
+				if (rx_nb)
+					output_speaker[k] = nb_process(output_speaker[k], rx_nb);
+				if (rx_anotch)
+					output_speaker[k] = (int32_t)anotch_process((float)output_speaker[k]);
+			}
+		}
+
 		/* AI Noise Reduction (RNNoise): 96k->48k decimate, 480-frame, upsample. voice only, default off */
 		if (rx_rnnoise && rnn_st && (r->mode==MODE_USB || r->mode==MODE_LSB || r->mode==MODE_AM)){
 			int k, m, nt;
@@ -1611,6 +1667,18 @@ void sdr_request(char *request, char *response){
 
 	if (!strcmp(cmd, "rx_anf")){ rx_anf = (!strcmp(value,"ON")||atoi(value))?1:0; if(response) strcpy(response, "ok"); return; }
 
+	if (!strcmp(cmd, "anotch")){
+		rx_anotch = (!strcmp(value,"ON")||atoi(value))?1:0;
+		if (rx_anotch){ memset(an_w, 0, sizeof(an_w)); memset(an_hist, 0, sizeof(an_hist)); }
+		return 0;
+	}
+	if (!strcmp(cmd, "nb")){
+		rx_nb = atoi(value);
+		if (rx_nb < 0) rx_nb = 0;
+		if (rx_nb > 100) rx_nb = 100;
+		nb_avg = 0;
+		return 0;
+	}
 	if (!strcmp(cmd, "rx_rnnoise")){
 		rx_rnnoise = (!strcmp(value,"ON")||atoi(value))?1:0;
 		if (rx_rnnoise){

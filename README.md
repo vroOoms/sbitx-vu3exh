@@ -205,12 +205,34 @@ search up ():
 Measured on air: 2.1 -> 3.4 decodes per slot, 79% of what WSJT-X hears
 on the same audio (was 54%), costing 670 ms of one core per 15 s slot.
 
-Do not raise these further. `kFreq_osr = 4` breaks ft8_lib's sync
+**Multi-pass decoding with subtraction** goes further: each pass decodes,
+re-encodes what it found (the exact waveform the sender used), fits each
+symbol's amplitude and phase against the received audio and subtracts it,
+then searches the residue again - so a weak signal sitting under a strong
+one becomes visible. Three passes measured back to back on the same band:
+4.8 -> 5.7 decodes per slot (+19%) for 849 -> 1653 ms of one core. The
+device now also finds messages WSJT-X misses.
+
+Do not raise the search parameters further. `kFreq_osr = 4` breaks ft8_lib's sync
 scoring outright - 1000 noise candidates, 3 s decodes, zero messages -
 and `kMin_score` below 5 fills the candidate list with noise. What
 remains is structural: WSJT-X subtracts decoded signals and re-searches
 the residue, which ft8_lib does not do. The decodes still missed
 average -15.8 dB, against -8.5 dB for those both find.
+
+## 4a4. SSB listening aids
+
+Voice modes have three noise tools, all off by default:
+
+| Control | What it does |
+|---|---|
+|  | RNNoise AI denoiser (already present) |
+|  | LMS adaptive auto-notch: a steady carrier is predictable from its own past and speech is not, so the filter learns the tone and keeps only the unpredictable part. Kills heterodyne whistles without a fixed notch's collateral damage |
+|  | noise blanker for impulse noise (ignition, switching supplies): samples far above the running average are replaced by that average rather than clipped, which avoids the splatter a hard limiter makes. Value is the threshold, 0 = off |
+
+Note the FT8 subtraction trick does **not** transfer to speech: it works
+only because a decoded FT8 message can be regenerated exactly. Speech
+cannot, so voice needs these statistical methods instead.
 
 ## 4b. WSPR — a real mode
 

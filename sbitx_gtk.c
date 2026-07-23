@@ -515,6 +515,8 @@ struct field main_controls[] = {
 	{ "#opt", NULL, 1000, -1000, 60, 45, "OPT", 40, "", FIELD_BUTTON, FONT_FIELD_VALUE, "", 0,0,0, COMMON_CONTROL},
 	{ "#smart", NULL, 1000, -1000, 55, 45, "SMART", 40, "OFF", FIELD_TOGGLE, FONT_FIELD_VALUE, "ON/OFF", 0,0,0, COMMON_CONTROL},
 	{ "rx_rnnoise", NULL, 1000, -1000, 60, 45, "AINR", 40, "OFF", FIELD_TOGGLE, FONT_FIELD_VALUE, "ON/OFF", 0,0,0, COMMON_CONTROL},
+	{ "anotch", NULL, 1000, -1000, 70, 45, "ANOTCH", 40, "OFF", FIELD_TOGGLE, FONT_FIELD_VALUE, "ON/OFF", 0,0,0, COMMON_CONTROL},
+	{ "nb", NULL, 1000, -1000, 55, 45, "NB", 40, "0", FIELD_NUMBER, FONT_FIELD_VALUE, "", 0, 100, 5, COMMON_CONTROL},
 	{ "r1:gain", NULL, 375, 5, 40, 40, "IF", 40, "60", FIELD_NUMBER, FONT_FIELD_VALUE, 
 		"", 0, 100, 1,COMMON_CONTROL},
 	{ "r1:agc", NULL, 415, 5, 40, 40, "AGC", 40, "SLOW", FIELD_SELECTION, FONT_FIELD_VALUE, 
@@ -2478,6 +2480,8 @@ static void layout_ui(){
 			field_move("ANF", 345, y1, 55, 45);
 			field_move("SCAN", 403, y1, 55, 45);
 			field_move("AINR", 461, y1, 55, 45);
+			field_move("ANOTCH", 518, y1, 62, 45);
+			field_move("NB", 582, y1, 45, 45);
 			field_move("WIDE", 519, y1, 55, 45);
 			field_move("OPT", 577, y1, 55, 45);
 			field_move("SMART", 635, y1, 55, 45);
@@ -5151,6 +5155,14 @@ void do_control_action(char *cmd){
 	}
 	else if (!strcmp(request, "SET"))
 		settings_ui(window);
+	else if (!strncmp(request, "ANOTCH ", 7)){
+		sprintf(buff, "anotch=%s", request + 7);
+		sdr_request(buff, response);
+	}
+	else if (!strncmp(request, "NB ", 3)){
+		sprintf(buff, "nb=%s", request + 3);
+		sdr_request(buff, response);
+	}
 	else if (!strcmp(request, "SCAN ON")){
 		int cf = atoi(get_field("r1:freq")->value);
 		int mb = sizeof(band_stack)/sizeof(struct band), bi;

@@ -1518,6 +1518,57 @@ static void monitor_reset(monitor_t* me)
     me->max_mag = 0;
 }
 
+static int kSubtract_passes = 3;   // decode -> subtract -> decode again
+
+// Remove one decoded signal from the receive buffer.
+// The message is re-packed and re-encoded (the exact waveform the sender
+// used), then each symbol's amplitude and phase are measured against the
+// received audio and that projection is subtracted. Per-symbol fitting
+// tracks fading, which a single global amplitude cannot.
+static void ft8_subtract_signal(float *sig, int num_samples, const char *text,
+    float freq_hz, float time_sec, int sample_rate, float symbol_period,
+    bool is_ft8)
+{
+	uint8_t packed[FTX_LDPC_K_BYTES];
+	char msg[32];
+	strncpy(msg, text, sizeof(msg) - 1);
+	msg[sizeof(msg) - 1] = 0;
+	if (pack77(msg, packed) < 0)
+		return;                    // non-standard message: leave the audio alone
+	int n_tones = is_ft8 ? FT8_NN : FT4_NN;
+	uint8_t tones[FT8_NN > FT4_NN ? FT8_NN : FT4_NN];
+	if (is_ft8)
+		ft8_encode(packed, tones);
+	else
+		ft4_encode(packed, tones);
+
+	int spsym = (int)(symbol_period * sample_rate + 0.5f);
+	float spacing = 1.0f / symbol_period;
+	int start = (int)(time_sec * sample_rate + 0.5f);
+
+	for (int k = 0; k < n_tones; k++){
+		int i0 = start + k * spsym;
+		if (i0 < 0 || i0 + spsym > num_samples)
+			continue;
+		double w = 2.0 * M_PI * (freq_hz + tones[k] * spacing) / sample_rate;
+		// rotating phasor instead of calling sin/cos per sample
+		double cw = cos(w), sw = sin(w);
+		double cs = cos(w * i0), sn = sin(w * i0);
+		double sc = 0, ss = 0, t;
+		for (int n = 0; n < spsym; n++){
+			sc += sig[i0 + n] * cs;
+			ss += sig[i0 + n] * sn;
+			t = cs * cw - sn * sw; sn = cs * sw + sn * cw; cs = t;
+		}
+		double ac = 2.0 * sc / spsym, as = 2.0 * ss / spsym;
+		cs = cos(w * i0); sn = sin(w * i0);
+		for (int n = 0; n < spsym; n++){
+			sig[i0 + n] -= (float)(ac * cs + as * sn);
+			t = cs * cw - sn * sw; sn = cs * sw + sn * cw; cs = t;
+		}
+	}
+}
+
 static int sbitx_ft8_decode(float *signal, int num_samples, bool is_ft8)
 {
     int sample_rate = 12000;
@@ -1550,6 +1601,37 @@ static int sbitx_ft8_decode(float *signal, int num_samples, bool is_ft8)
 			mycallsign_upper[i] = toupper(mycallsign[i]);
 		mycallsign_upper[i] = 0;	
 
+    // Subtraction rewrites the samples, so work on a private copy: the
+    // audio thread is already refilling the live buffer for the next slot.
+    static float *work = NULL;
+    static int work_cap = 0;
+    if (work_cap < num_samples){
+        float *nw = realloc(work, num_samples * sizeof(float));
+        if (nw){ work = nw; work_cap = num_samples; }
+    }
+    if (work && work_cap >= num_samples){
+        memcpy(work, signal, num_samples * sizeof(float));
+        signal = work;
+    }
+
+    // messages decoded in a pass, to be subtracted before the next one
+    struct { char text[26]; float freq_hz, time_sec; } sub_list[32];
+    int n_sub = 0;
+    int n_decodes = 0;
+    int num_candidates = 0;
+    int decode_t0 = millis();
+
+    // Hash table for decoded messages (to check for duplicates). It lives
+    // across passes so a signal is only ever reported once.
+    int num_decoded = 0;
+    message_t decoded[kMax_decoded_messages];
+    message_t* decoded_hashtable[kMax_decoded_messages];
+    for (int i = 0; i < kMax_decoded_messages; ++i)
+        decoded_hashtable[i] = NULL;
+
+    for (int pass = 0; pass < kSubtract_passes; pass++)
+    {
+    n_sub = 0;
     monitor_init(&mon, &mon_cfg);
 
     // Process the waveform data frame by frame - you could have a live loop here with data from an audio device
@@ -1560,22 +1642,8 @@ static int sbitx_ft8_decode(float *signal, int num_samples, bool is_ft8)
 //    LOG(LOG_INFO, "Max magnitude: %.1f dB\n", mon.max_mag);
 
     // Find top candidates by Costas sync score and localize them in time and frequency
-    int decode_t0 = millis();
     candidate_t candidate_list[kMax_candidates];
-    int num_candidates = ft8_find_sync(&mon.wf, kMax_candidates, candidate_list, kMin_score);
-
-    // Hash table for decoded messages (to check for duplicates)
-    int num_decoded = 0;
-    message_t decoded[kMax_decoded_messages];
-    message_t* decoded_hashtable[kMax_decoded_messages];
-
-    // Initialize hash table pointers
-    for (int i = 0; i < kMax_decoded_messages; ++i)
-    {
-        decoded_hashtable[i] = NULL;
-    }
-
-		int n_decodes = 0;
+    num_candidates = ft8_find_sync(&mon.wf, kMax_candidates, candidate_list, kMin_score);
     // Go over candidates and attempt to decode messages
     for (int idx = 0; idx < num_candidates; ++idx)
     {
@@ -1644,16 +1712,33 @@ static int sbitx_ft8_decode(float *signal, int num_samples, bool is_ft8)
 
 	//				save_message('R', cand->score, cand-snr,freq_hz, message.text);
 					n_decodes++;
+					if (n_sub < 32){
+						strncpy(sub_list[n_sub].text, message.text, 25);
+						sub_list[n_sub].text[25] = 0;
+						sub_list[n_sub].freq_hz = freq_hz;
+						sub_list[n_sub].time_sec = time_sec;
+						n_sub++;
+					}
         }
     }
+
+    {   // subtract this pass's decodes and look again at what is left
+        float symbol_period = mon.symbol_period;
+        monitor_free(&mon);
+        if (n_sub == 0 || pass + 1 >= kSubtract_passes)
+            break;
+        for (int s = 0; s < n_sub; s++)
+            ft8_subtract_signal(signal, num_samples, sub_list[s].text,
+                sub_list[s].freq_hz, sub_list[s].time_sec, sample_rate,
+                symbol_period, is_ft8);
+    }
+    } // end of pass loop
     {   // keep an eye on the decode budget: it must finish inside the slot
         int ms = millis() - decode_t0;
         FILE *tf = fopen("/tmp/ft8_decode_ms", "a");
         if (tf){ fprintf(tf, "%d %d %d\n", ms, num_candidates, n_decodes); fclose(tf); }
     }
     //LOG(LOG_INFO, "Decoded %d messages\n", num_decoded);
-
-    monitor_free(&mon);
 
     return n_decodes;
 }
