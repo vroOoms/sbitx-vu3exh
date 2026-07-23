@@ -472,7 +472,7 @@
 		><button class="sbitxv3-btn" id="telnet-open">TEL</button
 		><button class="sbitxv3-btn" id="recorder-open">REC</button
 		><button class="sbitxv3-btn" id="settings-open">SET</button>
-		<span id="uiver" style="color:#666;font-size:11px;margin-left:6px">ui v61</span>
+		<span id="uiver" style="color:#666;font-size:11px;margin-left:6px">ui v62</span>
 		<input type="text" class="sbitx-text-input sbitx-text-field" 
 			id="TEXT" placeholder="TEXT\CMD" size="20" />
 		</div><!-- end of more_keys -->
@@ -2322,6 +2322,14 @@ function hq_refresh(){
 	}).catch(function(){});
 }
 setInterval(hq_refresh, 10000); hq_refresh();
+// stale-tab watchdog: a long-lived tab reloads itself when the radio
+// serves a newer UI (this page never reloads on its own otherwise)
+setInterval(function(){
+	fetch('/index.html?vchk=' + Date.now()).then(function(r){ return r.text(); }).then(function(t){
+		var m = t.match(/>ui (v\d+)</);
+		if (m && m[1] != 'v62') location.reload();
+	}).catch(function(){});
+}, 120000);
 var worked_calls = {};
 var skip_prefixes = [];
 function load_worked(){

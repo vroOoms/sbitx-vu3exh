@@ -210,6 +210,35 @@ The `wspr` command (menu / web CMD) still works as a shortcut:
 - Set **AUTO to OFF** while running WSPR; `wspr off` stops everything.
 - Uses the FT8 receive chain - keep MODE = FT8.
 
+## 4c. WSJT-X on your computer (all the other modes)
+
+The sBITX can be the radio for WSJT-X running on any Mac/Windows/Linux
+machine — that unlocks JT65, JT9, JT4, Q65, FST4/FST4W with zero new
+hardware (their decoders are too heavy for the Pi, your computer does
+the work):
+
+1. **CAT**: WSJT-X → Settings → Radio: Rig = `Hamlib NET rigctl`,
+   Network Server = `192.168.0.108:4532`, PTT Method = CAT,
+   Mode = None, Split = None.
+2. **RX audio, no cables** — the radio streams its receiver audio:
+   - quick listen from anything: open `http://192.168.0.108:8082/rx`
+     in VLC or a browser;
+   - for WSJT-X: install a virtual audio device (**BlackHole** on
+     macOS, **VB-Cable** on Windows), download the bridge client from
+     `http://192.168.0.108:8080/sbitx_bridge_client.py`, then
+     `pip install sounddevice` and
+     `python3 sbitx_bridge_client.py --device "BlackHole 2ch"` —
+     set WSJT-X's *Input* to the virtual device.
+   - the bridge server runs on the radio:
+     `python3 /home/pi/sbitx/audio_bridge.py` (add
+     `@reboot /usr/bin/python3 /home/pi/sbitx/audio_bridge.py` to
+     `crontab -e` to start at boot).
+3. **TX audio** (when you want WSJT-X to transmit): one 3.5 mm cable
+   from the computer's headphone out to the sBITX **MIC** jack (not
+   the ear jack — that's an output). External TX audio rides the voice
+   chain, where DRIVE works normally. Keep AUTO = OFF while WSJT-X
+   drives the radio.
+
 ## 5. Commands
 
 **Command buttons** — the top-row `WEB` button is now **`3D`**: it toggles
