@@ -78,6 +78,15 @@ isolated enough to upstream directly.
     forward power live during the transmission; FT8's clipped
     full-power behavior is left as the (universal) status quo.
 
+18. **rigctl (port 4532) is unreachable from the network and hangs
+    clients mid-handshake.** The server binds `127.0.0.1`, so every
+    remote CAT client - WSJT-X, gpredict, rigctl on a laptop - gets
+    "Connection refused" (`rig_open returning2(-6) IO error`). And the
+    dispatcher only handles `m VFOA`; the bare `m` that WSJT-X sends
+    falls through with no reply, so even a local client hangs in Test
+    CAT after connecting successfully. Fix: bind `INADDR_ANY` (plus
+    `SO_REUSEADDR`) and answer bare `m`, `M`, and get/set_powerstat.
+
 ## Operational gotchas
 
 13. Control ports **8081 (text) and 4532 (rigctl) are single-client**:
