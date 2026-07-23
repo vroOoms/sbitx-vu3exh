@@ -181,10 +181,25 @@ Colors (same on device and web):
 tap still selects. The web lists scroll natively and every row is clickable
 to answer.
 
-## 4b. WSPR
+## 4b. WSPR — a real mode
 
-`wspr` (menu / web CMD) turns the radio into a WSPR beacon + monitor on
-the current band (it QSYs to the band's WSPR dial automatically):
+Set **MODE = WSPR** (device or web). The radio QSYs to the band's WSPR
+dial, AUTO is forced OFF, and the screen becomes a WSPR console with
+four controls:
+
+| Field | Meaning |
+|---|---|
+| `BEACON` | % of even slots transmitted (0 = monitor only) |
+| `DBM` | target TX power (37 dBm = 5 W default). **Closed-loop, live**: the forward-power bridge is read during the transmission and the tone level is trimmed to the target within seconds; if output exceeds 2x target + 3 W for 2 s the TX is aborted. Works at any DRIVE setting |
+| `UPLOAD` | send received spots to wsprnet.org under your call |
+| `HOP` | classic band-hopping: every even slot rotates to the next allowed band (`robobands` list, SWR-blocked bands skipped) — beacon + monitor across the HF spectrum unattended |
+
+Spots print with **distance in km**, log to `data/wspr_spots.csv` and
+appear on the web map (WSPR layer). While WSPR runs the FT8 decoder is
+silenced — the receiver belongs to WSPR. Leaving the mode stops
+everything and restores your DRIVE.
+
+The `wspr` command (menu / web CMD) still works as a shortcut:
 
 - **Even UTC slots**: some are transmitted (`wspr 25` = 25% duty, the
   default; `wspr 0` = receive-only), the rest are captured and decoded

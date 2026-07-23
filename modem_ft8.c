@@ -110,6 +110,35 @@ static short *wspr_rx_buf = NULL;
 static int wspr_rx_idx = 0;
 static int wspr_capturing = 0;
 static int wspr_decoding = 0;
+static double wspr_amp = 0.5; // modem chain clips near 1.0: work below it
+static int wspr_tx_flag = 0;
+
+// closed loop on MEASURED output: the modem TX path bypasses DRIVE, so
+// power is set by the tone amplitude itself (power ~ amp^2)
+void wspr_tx_done_hook(int pw10){
+	if (!wspr_tx_flag) return;
+	wspr_tx_flag = 0;
+	char note[130];
+	double target = pow(10.0, wspr_dbm / 10.0) / 1000.0;
+	double got = pw10 / 10.0;
+	// the live in-TX loop owns calibration; this is report-only
+	sprintf(note, "WSPR TX done: peak %.1fW (target %.1fW, amp %d)\n",
+		got, target, (int)(wspr_amp * 1000));
+	write_console(FONT_LOG, note);
+}
+
+static int wspr_grid_km(const char *g){
+	const char *my = field_str("MYGRID");
+	if (strlen(g) < 4 || strlen(my) < 4) return 0;
+	double lon1 = (my[0]-'A')*20 - 180 + (my[2]-'0')*2 + 1;
+	double lat1 = (my[1]-'A')*10 - 90 + (my[3]-'0') + 0.5;
+	double lon2 = (toupper(g[0])-'A')*20 - 180 + (g[2]-'0')*2 + 1;
+	double lat2 = (toupper(g[1])-'A')*10 - 90 + (g[3]-'0') + 0.5;
+	double dla = (lat2-lat1)*M_PI/180, dlo = (lon2-lon1)*M_PI/180;
+	double a = sin(dla/2)*sin(dla/2)
+		+ cos(lat1*M_PI/180)*cos(lat2*M_PI/180)*sin(dlo/2)*sin(dlo/2);
+	return (int)(6371.0 * 2.0 * atan2(sqrt(a), sqrt(1.0-a)));
+}
 
 static const unsigned char wspr_sync[162] = {
 1,1,0,0,0,0,0,0,1,0,0,0,1,1,1,0,0,0,1,0,0,1,0,1,1,1,1,0,0,0,
@@ -186,7 +215,7 @@ float wspr_next_sample(){
 	wspr_tx_left--;
 	if (wspr_tx_left == 0)
 		ft8_tx_nsamples = 0; // FT8 TXEND path closes the TX + logs power
-	return 4000.0 * sin(wspr_phase);
+	return wspr_amp * sin(wspr_phase);
 }
 
 static void wspr_dump_and_decode(){
@@ -228,8 +257,8 @@ static void wspr_report_spots(){
 		if (sscanf(ln, "%9s %d %f %lf %d %15s %7s %d",
 			t1, &snr, &dt, &fq, &drift, c1, g1, &dbm) == 8){
 			nsp++;
-			snprintf(note, sizeof(note), "WSPR: %s %s %d dBm  %d dB  %.6f MHz\n",
-				c1, g1, dbm, snr, fq);
+			snprintf(note, sizeof(note), "WSPR: %-10s %s %5dkm %2ddBm %3ddB\n",
+				c1, g1, wspr_grid_km(g1), dbm, snr);
 			write_console(FONT_FT8_REPORT, note);
 			FILE *cf = fopen("/home/pi/sbitx/data/wspr_spots.csv", "a");
 			if (cf){
@@ -269,13 +298,34 @@ void wspr_tick(int tx_is_on){
 	if (now == last) return;
 	last = now;
 	struct tm *t = gmtime(&now);
+	int wdisp = !strcmp(field_str("MODE"), "WSPR");
+	if (wdisp){
+		wspr_pct = field_int("BEACON");
+		wspr_dbm = field_int("DBM");
+		wspr_upload = !strcmp(field_str("UPLOAD"), "ON");
+	}
 	if ((t->tm_min % 2) == 0 && t->tm_sec == 1 && !tx_is_on){
+		if (wdisp && !strcmp(field_str("HOP"), "ON") && !wspr_decoding){
+			static int hop_i = 3;
+			static const long wdial[8] = {3568600,7038600,10138700,14095600,
+				18104600,21094600,24924600,28124600};
+			int tries = 8;
+			do { hop_i = (hop_i + 1) % 8; } while (--tries && !hunt_band_ok(wdial[hop_i]));
+			if (labs((long)freq_hdr - wdial[hop_i]) > 1000){
+				char fc[26], nn[60];
+				sprintf(fc, "freq %ld", wdial[hop_i]);
+				cmd_exec(fc);
+				sprintf(nn, "WSPR hop: %.4f MHz\n", wdial[hop_i] / 1e6);
+				write_console(FONT_LOG, nn);
+			}
+		}
 		if (wspr_pct > 0 && (rand() % 100) < wspr_pct
 			&& !strlen(field_str("CALL"))){
 			char myg[8], note[90];
 			strncpy(myg, field_str("MYGRID"), 4); myg[4] = 0;
 			if (wspr_encode(field_str("MYCALLSIGN"), myg, wspr_dbm, wspr_syms) == 0){
 				sprintf(ft8_tx_text, "WSPR %s %s %d", field_str("MYCALLSIGN"), myg, wspr_dbm);
+				wspr_tx_flag = 1;
 				wspr_phase = 0;
 				wspr_tx_left = WSPR_TOTAL;
 				ft8_tx_nsamples = 1; // sentinel: cleared when wspr finishes
@@ -336,7 +386,6 @@ void wspr_ctl(const char *args){
 	sprintf(note, "WSPR on: dial %.4f MHz, TX %d%% of even slots, %d dBm\n",
 		best / 1e6, wspr_pct, wspr_dbm);
 	write_console(FONT_LOG, note);
-	write_console(FONT_LOG, "set AUTO to OFF while running WSPR\n");
 }
 
 void wspr_selftest(){
@@ -1744,7 +1793,10 @@ void ft8_rx(int32_t *samples, int count){
 	//we should have atleast 12 seconds of samples to decode
 	if (ft8_rx_buff_index >= 13 * 12000 && slot_second > 13){
 		ft8_decode_freq = ft8_slot_freq ? ft8_slot_freq : freq_hdr;
-		ft8_do_decode = 1;
+		if (!wspr_active)
+			ft8_do_decode = 1; // WSPR owns the receiver
+		else
+			ft8_rx_buff_index = 0;
 	}
 }
 
@@ -1806,6 +1858,41 @@ void ft8_poll(int seconds, int tx_is_on){
 		static int tx_settled_vswr10 = 0;
 		if (fwdpower > tx_peak_pw10){ tx_peak_pw10 = fwdpower; tx_peak_vswr10 = vswr; }
 		if (fwdpower > 20 && vswr > 0) tx_settled_vswr10 = vswr;
+		if (wspr_tx_left > 0){
+			// live power control: trim the tone amplitude DURING the TX
+			// toward the dBm target, and kill it if it exceeds the plan
+			static int wspr_adj_ms = 0;
+			static time_t wspr_over_since = 0;
+			double wt = pow(10.0, wspr_dbm / 10.0) / 1000.0;
+			double wg = fwdpower / 10.0;
+			if (millis() - wspr_adj_ms > 500){
+				wspr_adj_ms = millis();
+				if (wg > 0.2){
+					double k = sqrt(wt / wg);
+					if (k < 0.7) k = 0.7;
+					if (k > 1.3) k = 1.3;
+					wspr_amp *= k;
+				} else
+					wspr_amp *= 1.35; // below the bridge floor: ramp until measurable
+				if (wspr_amp < 0.02) wspr_amp = 0.02;
+				if (wspr_amp > 2.5) wspr_amp = 2.5;
+			}
+			if (wg > wt * 2.0 + 3.0){
+				if (!wspr_over_since)
+					wspr_over_since = time(NULL);
+				else if (time(NULL) - wspr_over_since >= 2){
+					char wn[100];
+					sprintf(wn, "WSPR: %.1fW exceeds plan (%.1fW) - TX ABORTED\n", wg, wt);
+					write_console(FONT_LOG, wn);
+					wspr_over_since = 0;
+					ft8_abort();
+					tx_off();
+					return;
+				}
+			}
+			else
+				wspr_over_since = 0;
+		}
 		// live SWR probe: the first seconds of every auto TX are the test.
 		// sustained SWR > 1.9 kills the transmission NOW, not at its end.
 		if ((ft8_hunt_active || cq_mode || wspr_active) && fwdpower > 20){ // >2W out: bridge reading is valid
@@ -1853,6 +1940,7 @@ void ft8_poll(int seconds, int tx_is_on){
 					call_wipe();
 				}
 				tx_settled_vswr10 = 0;
+				wspr_tx_done_hook(last_tx_pw10);
 				if (ft8_pending_qso[0]){ // a request parked during this TX
 					char pq[256];
 					strcpy(pq, ft8_pending_qso);

@@ -545,7 +545,7 @@ struct field main_controls[] = {
 		"", 50, 5000, 50,COMMON_CONTROL},
 
 	{ "r1:mode", NULL, 5, 5, 40, 40, "MODE", 40, "USB", FIELD_SELECTION, FONT_FIELD_VALUE, 
-		"USB/LSB/CW/CWR/FT8/AM/DIGITAL/2TONE", 0,0,0, COMMON_CONTROL},
+		"USB/LSB/CW/CWR/FT8/WSPR/AM/DIGITAL/2TONE", 0,0,0, COMMON_CONTROL},
 
 	/* logger controls */
 
@@ -571,6 +571,10 @@ struct field main_controls[] = {
 	{"#cbtn_tone", do_cmdbtn, 1000, -2000, 70, 45, "TONE", 1, "", FIELD_BUTTON, FONT_FIELD_VALUE,"", 0,0,0,FT8_CONTROL},
 	{"#cbtn_ftb", do_cmdbtn, 1000, -2000, 50, 45, "FTBEST", 1, "", FIELD_BUTTON, FONT_FIELD_VALUE,"", 0,0,0,FT8_CONTROL},
 	{"#cbtn_cq", do_cmdbtn, 1000, -2000, 70, 45, "CQ", 1, "", FIELD_BUTTON, FONT_FIELD_VALUE,"", 0,0,0,FT8_CONTROL},
+	{"#wspr_pct", NULL, 1000, -2000, 95, 45, "BEACON", 100, "25", FIELD_NUMBER, FONT_FIELD_VALUE,"", 0,100,5,FT8_CONTROL},
+	{"#wspr_dbm", NULL, 1000, -2000, 70, 45, "DBM", 43, "37", FIELD_NUMBER, FONT_FIELD_VALUE,"", 0,43,1,FT8_CONTROL},
+	{"#wspr_upl", NULL, 1000, -2000, 85, 45, "UPLOAD", 40, "ON", FIELD_TOGGLE, FONT_FIELD_VALUE,"ON/OFF", 0,0,0,FT8_CONTROL},
+	{"#wspr_hop", NULL, 1000, -2000, 70, 45, "HOP", 40, "OFF", FIELD_TOGGLE, FONT_FIELD_VALUE,"ON/OFF", 0,0,0,FT8_CONTROL},
 	{"#logbook", NULL, 410, 50, 40, 40, "LOG", 1, "", FIELD_BUTTON, FONT_FIELD_VALUE,"", 0,0,0,COMMON_CONTROL}, 
 	{"#text_in", do_text, 5, 70, 285, 20, "TEXT", 70, "text box", FIELD_TEXT, FONT_LOG, 
 		"nothing valuable", 0,128,0,COMMON_CONTROL},
@@ -1394,6 +1398,8 @@ static int mode_id(const char *mode_str){
 		return MODE_CW;
 	else if (!strcmp(mode_str, "CWR"))
 		return MODE_CWR;
+	else if (!strcmp(mode_str, "WSPR"))
+		return MODE_FT8; // WSPR rides the FT8 DSP chain
 	else if (!strcmp(mode_str, "USB"))
 		return MODE_USB;
 	else if (!strcmp(mode_str,  "LSB"))
@@ -1699,10 +1705,14 @@ void draw_tx_meters(struct field *f, cairo_t *gfx){
 	if (power < 30)
 		vswr = 10;
 	
-	sprintf(meter_str, "Power: %d Watts", field_int("POWER")/10);
-	draw_text(gfx, f->x + 20 , f->y + 5 , meter_str, FONT_FIELD_LABEL);
-	sprintf(meter_str, "VSWR: %d.%d", vswr/10,vswr%10);
-	draw_text(gfx, f->x + 200 , f->y + 5 , meter_str, FONT_FIELD_LABEL);
+	// black strip below the yellow TX band: values always readable
+	int strip_h = 34;
+	int sy = f->y + f->height - strip_h;
+	fill_rect(gfx, f->x, sy, f->width, strip_h, COLOR_BACKGROUND);
+	sprintf(meter_str, "Power: %d.%d W", power/10, power%10);
+	draw_text(gfx, f->x + 30, sy + 7, meter_str, FONT_FIELD_VALUE);
+	sprintf(meter_str, "VSWR: %d.%d", vswr/10, vswr%10);
+	draw_text(gfx, f->x + f->width/2 + 30, sy + 7, meter_str, FONT_FIELD_VALUE);
 }
 
 // ---- 3D waterfall: perspective ridgelines, newest sweep at the front ----
@@ -2386,6 +2396,17 @@ static void layout_ui(){
 	int button_width = 100;
 	switch(m_id){
 		case MODE_FT8:
+			if (!strcmp(get_field("r1:mode")->value, "WSPR")){
+				field_move("CONSOLE", 5, y1, 350, y2-y1-55);
+				field_move("SPECTRUM", 360, y1, x2-365, 100);
+				field_move("WATERFALL", 360, y1+100, x2-365, y2-y1-155);
+				field_move("ESC", 5, y2-47, 40, 45);
+				field_move("BEACON", 50, y2-47, 95, 45);
+				field_move("DBM", 147, y2-47, 70, 45);
+				field_move("UPLOAD", 219, y2-47, 85, 45);
+				field_move("HOP", 306, y2-47, 70, 45);
+				break;
+			}
 			field_move("CONSOLE", 5, y1, 350, y2-y1-55);
 			field_move("SPECTRUM", 360, y1, x2-365, 100);
 			field_move("WATERFALL", 360, y1+100, x2-365, y2-y1-155);
@@ -4793,13 +4814,19 @@ gboolean ui_tick(gpointer gook){
 			}
 			sw1_last = sw1;
 		}
-		{	// leaving FT8 wipes queued auto-TX state (mode-change hang fix)
+		{	// mode transitions: wipe FT8 auto-TX state; start/stop WSPR
 			static char prev_mode[12] = "";
 			const char *cmnow = get_field("r1:mode")->value;
 			if (strcmp(cmnow, prev_mode)){
-				if (!strcmp(prev_mode, "FT8")){
+				if (!strcmp(prev_mode, "FT8") || !strcmp(prev_mode, "WSPR")){
 					ft8_abort();
 					call_wipe();
+				}
+				if (!strcmp(prev_mode, "WSPR"))
+					wspr_ctl("off");
+				if (!strcmp(cmnow, "WSPR")){
+					field_set("FT8_AUTO", "OFF");
+					wspr_ctl("");
 				}
 				strncpy(prev_mode, cmnow, 11);
 				prev_mode[11] = 0;
