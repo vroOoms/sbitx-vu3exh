@@ -189,6 +189,29 @@ hunter, CQ/CQHUNT, the queue, colors, logging, RR73 fast exchanges —
 at **7.5-second slots**: twice the QSO rate. The decode timestamps
 round to the 15 s pair (cosmetic).
 
+## 4a3. Decoder depth
+
+The stock FT8 decoder settings are very conservative and find roughly
+half of what WSJT-X finds on identical audio. This build opens the
+search up ():
+
+| Setting | Stock | Here | Effect |
+|---|---|---|---|
+| `kMin_score` | 10 | 5 | weak signals become candidates at all |
+| `kMax_candidates` | 120 | 400 | the list saturated on a busy band |
+| `kLDPC_iterations` | 20 | 30 | marginal signals survive error correction |
+| `kTime_osr` | 2 | 4 | finer timing resolution |
+
+Measured on air: 2.1 -> 3.4 decodes per slot, 79% of what WSJT-X hears
+on the same audio (was 54%), costing 670 ms of one core per 15 s slot.
+
+Do not raise these further. `kFreq_osr = 4` breaks ft8_lib's sync
+scoring outright - 1000 noise candidates, 3 s decodes, zero messages -
+and `kMin_score` below 5 fills the candidate list with noise. What
+remains is structural: WSJT-X subtracts decoded signals and re-searches
+the residue, which ft8_lib does not do. The decodes still missed
+average -15.8 dB, against -8.5 dB for those both find.
+
 ## 4b. WSPR — a real mode
 
 Set **MODE = WSPR** (device or web). The radio QSYs to the band's WSPR

@@ -1183,14 +1183,16 @@ extern void call_wipe();
 #define FT8_START_QSO 1
 #define FT8_CONTINUE_QSO 0
 static unsigned int wallclock =0;
-static const int kMin_score = 10; // Minimum sync score threshold for candidates
-static const int kMax_candidates = 120;
-static const int kLDPC_iterations = 20;
+static int kMin_score = 5;  // stock 10 misses weak signals; below 5 the
+                            // candidate list fills with noise
+static int kMax_candidates = 400;  // stock 120 saturated on a busy band
+static int kLDPC_iterations = 30;   // was 20: more belief-propagation passes
 
-static const int kMax_decoded_messages = 50;
+static int kMax_decoded_messages = 100;
 
-static const int kFreq_osr = 2; // Frequency oversampling rate (bin subdivision)
-static const int kTime_osr = 2; // Time oversampling rate (symbol subdivision)
+static int kFreq_osr = 2; // 4 breaks ft8_lib sync scoring: noise candidates,
+                          // 3 s decodes and nothing found. Leave at 2.
+static int kTime_osr = 4; // time oversampling: 2 -> 4 sharpens weak sync
 
 #define LOG_LEVEL LOG_INFO
 
@@ -1558,6 +1560,7 @@ static int sbitx_ft8_decode(float *signal, int num_samples, bool is_ft8)
 //    LOG(LOG_INFO, "Max magnitude: %.1f dB\n", mon.max_mag);
 
     // Find top candidates by Costas sync score and localize them in time and frequency
+    int decode_t0 = millis();
     candidate_t candidate_list[kMax_candidates];
     int num_candidates = ft8_find_sync(&mon.wf, kMax_candidates, candidate_list, kMin_score);
 
@@ -1642,6 +1645,11 @@ static int sbitx_ft8_decode(float *signal, int num_samples, bool is_ft8)
 	//				save_message('R', cand->score, cand-snr,freq_hz, message.text);
 					n_decodes++;
         }
+    }
+    {   // keep an eye on the decode budget: it must finish inside the slot
+        int ms = millis() - decode_t0;
+        FILE *tf = fopen("/tmp/ft8_decode_ms", "a");
+        if (tf){ fprintf(tf, "%d %d %d\n", ms, num_candidates, n_decodes); fclose(tf); }
     }
     //LOG(LOG_INFO, "Decoded %d messages\n", num_decoded);
 
