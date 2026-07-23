@@ -68,6 +68,16 @@ isolated enough to upstream directly.
     (device tap-reply tokenizer + two web parsers). Any change to the
     line format silently breaks tap-to-reply and the web lists.
 
+17. **Digital-mode TX has no power control and transmits clipped at
+    full PA power.** Modem samples enter the TX chain around +/-4700
+    while the voice path works at +/-1.0 - the input rails the chain
+    flat, so FT8 transmits ~full power regardless of DRIVE (DRIVE=1
+    still produced 19 W on our unit). Output responds only to the
+    product of source amplitude x DRIVE once the source is scaled into
+    the sub-clip range. Our WSPR mode closes the loop on the measured
+    forward power live during the transmission; FT8's clipped
+    full-power behavior is left as the (universal) status quo.
+
 ## Operational gotchas
 
 13. Control ports **8081 (text) and 4532 (rigctl) are single-client**:
