@@ -1,0 +1,79 @@
+--- swr_monitor.c.bak	2026-07-24 04:33:16.000025576 +0530
++++ swr_monitor.c	2026-07-24 04:36:55.080632343 +0530
+@@ -45,6 +45,9 @@
+ int vswr_on=1;
+ #define SWR_ALERT_TIMEOUT_SECS 10
+ static time_t vswr_trip_time = 0;
++#define SWR_GRACE_SECS 3          // auto-tuner matching time before tripping
++static time_t swr_high_since = 0;
++static char saved_drive[16] = "";
+ 
+ /**
+  * Check VSWR and handle reduction/recovery
+@@ -72,37 +75,36 @@
+ 	}
+ 	
+ 	// Check if VSWR exceeds threshold and not already tripped
+-	if (swr > max_vswr && vswr_tripped == 0 && vswr_on==1) { // 
+-
+-		char response[100];
+-		char drive_str[32];
+-		char sdr_cmd[64];
+-		
+-		// Set tripped flag
+-		vswr_tripped = 1;
+-		vswr_trip_time = time(NULL);		
+-		set_field("tx_power", "1");			
+-		// Write warning to console
+-		char warning_msg[128];
+-		snprintf(warning_msg, sizeof(warning_msg), 
+-			 "\n *VSWR WARNING: SWR %.1f exceeds threshold %.1f\n",
+-			 swr, max_vswr, 1);
+-		write_console(STYLE_LOG, warning_msg);
+-
++	if (swr > max_vswr && vswr_on==1) {
++		// give the auto-tuner a few seconds to match before cutting power;
++		// only a SUSTAINED mismatch trips
++		if (swr_high_since == 0)
++			swr_high_since = time(NULL);
++		if (vswr_tripped == 0 && difftime(time(NULL), swr_high_since) >= SWR_GRACE_SECS) {
++			vswr_tripped = 1;
++			vswr_trip_time = time(NULL);
++			get_field_value_by_label("DRIVE", saved_drive);
++			if (atoi(saved_drive) < 2) strcpy(saved_drive, "40");
++			set_field("tx_power", "1");
++			char warning_msg[128];
++			snprintf(warning_msg, sizeof(warning_msg),
++				 "\n *VSWR WARNING: SWR %.1f over %.1f for %ds - power cut\n",
++				 swr, max_vswr, SWR_GRACE_SECS);
++			write_console(STYLE_LOG, warning_msg);
++		}
++	}
++	else if (swr <= max_vswr) {
++		swr_high_since = 0;             // tuner matched - reset the grace timer
++		if (vswr_tripped == 1) {
++			vswr_tripped = 0;
++			vswr_trip_time = 0;
++			if (saved_drive[0]) { set_field("tx_power", saved_drive); saved_drive[0] = 0; }
++			char info_msg[128];
++			snprintf(info_msg, sizeof(info_msg),
++				 "\n *VSWR: SWR %.1f back below %.1f - power restored\n",
++				 swr, max_vswr);
++			write_console(STYLE_LOG, info_msg);
+ 		}
+-	// Check if VSWR has fallen below threshold and was previously tripped
+-	else if (swr <= max_vswr && vswr_tripped == 1) {
+-		// Clear tripped flag
+-		vswr_tripped = 0;
+-		vswr_trip_time = 0;
+-		// Write info to console
+-		char info_msg[128];
+-		snprintf(info_msg, sizeof(info_msg), 
+-			 "\n *VSWR: SWR %.1f back below threshold %.1f, UI cleared\n",
+-			 swr, max_vswr);
+-		write_console(STYLE_LOG, info_msg);
+-//		printf("off %.1f  %d\n", swr, call_count);
+-		// Do NOT restore the drive value - leave it reduced for safety
+ 	}
+ }
+ 
