@@ -181,6 +181,20 @@ Colors (same on device and web):
 tap still selects. The web lists scroll natively and every row is clickable
 to answer.
 
+## 4b. WSPR
+
+`wspr` (menu / web CMD) turns the radio into a WSPR beacon + monitor on
+the current band (it QSYs to the band's WSPR dial automatically):
+
+- **Even UTC slots**: some are transmitted (`wspr 25` = 25% duty, the
+  default; `wspr 0` = receive-only), the rest are captured and decoded
+  with the K1JT `wsprd` decoder. Spots appear in the console, log to
+  `data/wspr_spots.csv`, and upload to **wsprnet.org** under your call.
+- A WSPR transmission is 110.6 s at your normal power (reported as
+  43 dBm ≈ 20 W in the message). The SWR guard stays active.
+- Set **AUTO to OFF** while running WSPR; `wspr off` stops everything.
+- Uses the FT8 receive chain - keep MODE = FT8.
+
 ## 5. Commands
 
 **Command buttons** — the top-row `WEB` button is now **`3D`**: it toggles

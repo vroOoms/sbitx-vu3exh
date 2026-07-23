@@ -466,6 +466,8 @@ void ft8_cq_now(void);
 void hunt_reply_call(const char *call);
 void hunt_swr_clear(void);
 void ft8_abort(void);
+void wspr_ctl(const char *args);
+void wspr_selftest(void);
 int do_record(struct field *f, cairo_t *gfx, int event, int a, int b, int c);
 int do_bandwidth(struct field *f, cairo_t *gfx, int event, int a, int b, int c);
 
@@ -5464,6 +5466,12 @@ void cmd_exec(char *cmd){
 			pclose(np);
 		}
 	}
+	else if (!strcmp(exec, "wspr")){
+		wspr_ctl(args);
+	}
+	else if (!strcmp(exec, "wsprtest")){
+		wspr_selftest();
+	}
 	else if (!strcmp(exec, "cq")){
 		ft8_cq_now();
 	}
@@ -5506,6 +5514,7 @@ void cmd_exec(char *cmd){
 			"CMD: cq - call CQ now\n"
 			"CMD: swrclear - clear SWR band blocks\n"
 			"CMD: net - network devices and IPs\n"
+			"CMD: wspr - WSPR beacon+monitor (wspr 0..100 duty, wspr off)\n"
 			"CMD: screen off - blank screen\n"
 			"CMD: silent - mute all + screen\n"
 			"CMD: wake - restore all\n");

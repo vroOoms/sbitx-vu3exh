@@ -91,6 +91,271 @@ int ft8_hunt_active = 0;              // cached: FT8_AUTO is HUNT or ROBO
 static char ft8_pending_qso[256] = ""; // START_QSO parked while we transmit
 static char last_rr73_call[16] = "";   // who we closed with RR73 (for repeats)
 static time_t last_rr73_at = 0;
+
+// ================= WSPR (rides inside FT8 mode) =================
+// TX: 162-symbol 4-FSK at ~1500 Hz, keyed at even UTC minutes +1s.
+// RX: even slots captured at 12 ksps, decoded by /home/pi/wsprd/wsprd,
+// spots printed/logged/uploaded to wsprnet.org.
+static int wspr_active = 0;
+static int wspr_pct = 25;             // % of even slots transmitted
+static int wspr_dbm = 43;             // reported power (43 dBm ~ 20W)
+static int wspr_upload = 1;
+static long wspr_tx_left = 0;
+static double wspr_phase = 0;
+static unsigned char wspr_syms[162];
+#define WSPR_SPS 65536L               // samples per symbol at 96k
+#define WSPR_TOTAL (162L * WSPR_SPS)  // 110.6 s
+#define WSPR_RX_SAMPLES (120*12000)
+static short *wspr_rx_buf = NULL;
+static int wspr_rx_idx = 0;
+static int wspr_capturing = 0;
+static int wspr_decoding = 0;
+
+static const unsigned char wspr_sync[162] = {
+1,1,0,0,0,0,0,0,1,0,0,0,1,1,1,0,0,0,1,0,0,1,0,1,1,1,1,0,0,0,
+0,0,0,0,1,0,0,1,0,1,0,0,0,0,0,0,1,0,1,1,0,0,1,1,0,1,0,0,0,1,
+1,0,1,0,0,0,0,1,1,0,1,0,1,0,1,0,1,0,0,1,0,0,1,0,1,1,0,0,0,1,
+1,0,1,0,1,0,0,0,1,0,0,0,0,0,1,0,0,1,0,0,1,1,1,0,1,1,0,0,1,1,
+0,1,0,0,0,1,1,1,0,0,0,0,0,1,0,1,0,0,1,1,0,0,0,0,0,0,0,1,1,0,
+1,0,1,1,0,0,0,1,1,0,0,0};
+
+static int wspr_chval(char c){
+	if (isdigit(c)) return c - '0';
+	if (isalpha(c)) return toupper(c) - 'A' + 10;
+	return 36;
+}
+static unsigned char wspr_parity(unsigned int x){
+	unsigned char p = 0;
+	while (x){ p ^= 1; x &= x - 1; }
+	return p;
+}
+// standard WSPR type-1 message: callsign + 4-char grid + dBm
+static int wspr_encode(const char *callsign, const char *grid, int dbm,
+	unsigned char *symbols){
+	char call[7];
+	int len = strlen(callsign);
+	if (len < 3 || len > 6) return -1;
+	memset(call, ' ', 6); call[6] = 0;
+	if (len >= 2 && isdigit(callsign[1]) && !isdigit(callsign[2]))
+		memcpy(call + 1, callsign, len); // shift so the digit lands 3rd
+	else
+		memcpy(call, callsign, len);
+	if (!isdigit(call[2])) return -1;
+	unsigned int n = wspr_chval(call[0]);
+	n = n * 36 + wspr_chval(call[1]);
+	n = n * 10 + (call[2] - '0');
+	n = n * 27 + (wspr_chval(call[3]) - 10);
+	n = n * 27 + (wspr_chval(call[4]) - 10);
+	n = n * 27 + (wspr_chval(call[5]) - 10);
+	if (!isupper(grid[0]) || !isupper(grid[1]) ||
+		!isdigit(grid[2]) || !isdigit(grid[3])) return -1;
+	unsigned int m = ((179 - 10*(grid[0]-'A') - (grid[2]-'0')) * 180)
+		+ 10*(grid[1]-'A') + (grid[3]-'0');
+	m = m * 128 + dbm + 64;
+	unsigned char bits[81];
+	memset(bits, 0, sizeof(bits));
+	for (int i = 0; i < 28; i++) bits[i] = (n >> (27 - i)) & 1;
+	for (int i = 0; i < 22; i++) bits[28 + i] = (m >> (21 - i)) & 1;
+	unsigned int reg = 0;
+	unsigned char raw[162], inter[162];
+	int k = 0;
+	for (int i = 0; i < 81; i++){
+		reg = (reg << 1) | bits[i];
+		raw[k++] = wspr_parity(reg & 0xF2D05351);
+		raw[k++] = wspr_parity(reg & 0xE4613C47);
+	}
+	int idx = 0;
+	for (int j = 0; j < 256; j++){
+		int r = 0;
+		for (int b = 0; b < 8; b++)
+			if (j & (1 << b)) r |= 0x80 >> b;
+		if (r < 162) inter[r] = raw[idx++];
+	}
+	for (int i = 0; i < 162; i++)
+		symbols[i] = wspr_sync[i] + 2 * inter[i];
+	return 0;
+}
+
+float wspr_next_sample(){
+	if (wspr_tx_left <= 0) return 0;
+	long done = WSPR_TOTAL - wspr_tx_left;
+	int sym = wspr_syms[done / WSPR_SPS];
+	double fr = 1500.0 + (sym - 1.5) * (12000.0 / 8192.0);
+	wspr_phase += 2.0 * M_PI * fr / 96000.0;
+	if (wspr_phase > 2.0 * M_PI) wspr_phase -= 2.0 * M_PI;
+	wspr_tx_left--;
+	if (wspr_tx_left == 0)
+		ft8_tx_nsamples = 0; // FT8 TXEND path closes the TX + logs power
+	return 4000.0 * sin(wspr_phase);
+}
+
+static void wspr_dump_and_decode(){
+	FILE *f = fopen("/tmp/wspr_cap.wav", "w");
+	if (!f || !wspr_rx_buf) return;
+	int sr = 12000, n = WSPR_RX_SAMPLES;
+	int datalen = n * 2, riff = 36 + datalen;
+	unsigned char h[44] = {'R','I','F','F',0,0,0,0,'W','A','V','E',
+		'f','m','t',' ',16,0,0,0,1,0,1,0,0,0,0,0,0,0,0,0,2,0,16,0,
+		'd','a','t','a',0,0,0,0};
+	h[4]=riff&255; h[5]=(riff>>8)&255; h[6]=(riff>>16)&255; h[7]=(riff>>24)&255;
+	h[24]=sr&255; h[25]=(sr>>8)&255; h[26]=(sr>>16)&255;
+	int br = sr*2;
+	h[28]=br&255; h[29]=(br>>8)&255; h[30]=(br>>16)&255;
+	h[40]=datalen&255; h[41]=(datalen>>8)&255; h[42]=(datalen>>16)&255; h[43]=(datalen>>24)&255;
+	fwrite(h, 1, 44, f);
+	for (int i = wspr_rx_idx; i < WSPR_RX_SAMPLES; i++)
+		wspr_rx_buf[i] = 0;
+	fwrite(wspr_rx_buf, 2, WSPR_RX_SAMPLES, f);
+	fclose(f);
+	char cmd[300];
+	sprintf(cmd, "( /home/pi/wsprd/wsprd -f %.6f /tmp/wspr_cap.wav "
+		"> /tmp/wspr_spots.txt 2>/dev/null; touch /tmp/wspr_done ) &",
+		freq_hdr / 1e6);
+	system(cmd);
+	wspr_decoding = 1;
+	write_console(FONT_LOG, "WSPR: decoding...\n");
+}
+
+static void wspr_report_spots(){
+	FILE *f = fopen("/tmp/wspr_spots.txt", "r");
+	char ln[200], note[200];
+	int nsp = 0;
+	while (f && fgets(ln, sizeof(ln), f)){
+		char t1[10], c1[16], g1[8];
+		int snr, drift, dbm;
+		float dt;
+		double fq;
+		if (sscanf(ln, "%9s %d %f %lf %d %15s %7s %d",
+			t1, &snr, &dt, &fq, &drift, c1, g1, &dbm) == 8){
+			nsp++;
+			snprintf(note, sizeof(note), "WSPR: %s %s %d dBm  %d dB  %.6f MHz\n",
+				c1, g1, dbm, snr, fq);
+			write_console(FONT_FT8_REPORT, note);
+			FILE *cf = fopen("/home/pi/sbitx/data/wspr_spots.csv", "a");
+			if (cf){
+				time_t rt = time(NULL);
+				struct tm *tt = gmtime(&rt);
+				fprintf(cf, "%04d-%02d-%02d,%02d:%02d,%s,%s,%d,%d,%.1f,%d,%.6f\n",
+					tt->tm_year+1900, tt->tm_mon+1, tt->tm_mday, tt->tm_hour,
+					tt->tm_min, c1, g1, dbm, snr, dt, drift, fq);
+				fclose(cf);
+			}
+			if (wspr_upload){
+				char up[560], myg[8];
+				strncpy(myg, field_str("MYGRID"), 6); myg[6] = 0;
+				time_t rt = time(NULL);
+				struct tm *tt = gmtime(&rt);
+				snprintf(up, sizeof(up),
+					"( curl -s --max-time 20 'http://wsprnet.org/post?function=wspr"
+					"&rcall=%s&rgrid=%s&date=%02d%02d%02d&time=%02d%02d&sig=%d"
+					"&dt=%.1f&drift=%d&tqrg=%.6f&tcall=%s&tgrid=%s&dbm=%d"
+					"&version=sbitx-vu3exh' >/dev/null 2>&1 ) &",
+					field_str("MYCALLSIGN"), myg, (tt->tm_year+1900)%100,
+					tt->tm_mon+1, tt->tm_mday, tt->tm_hour, tt->tm_min, snr,
+					dt, drift, fq, c1, g1, dbm);
+				system(up);
+			}
+		}
+	}
+	if (f) fclose(f);
+	snprintf(note, sizeof(note), "WSPR: slot done, %d spot%s\n", nsp, nsp==1?"":"s");
+	write_console(FONT_LOG, note);
+}
+
+void wspr_tick(int tx_is_on){
+	if (!wspr_active) return;
+	time_t now = time(NULL);
+	static time_t last = 0;
+	if (now == last) return;
+	last = now;
+	struct tm *t = gmtime(&now);
+	if ((t->tm_min % 2) == 0 && t->tm_sec == 1 && !tx_is_on){
+		if (wspr_pct > 0 && (rand() % 100) < wspr_pct
+			&& !strlen(field_str("CALL"))){
+			char myg[8], note[90];
+			strncpy(myg, field_str("MYGRID"), 4); myg[4] = 0;
+			if (wspr_encode(field_str("MYCALLSIGN"), myg, wspr_dbm, wspr_syms) == 0){
+				sprintf(ft8_tx_text, "WSPR %s %s %d", field_str("MYCALLSIGN"), myg, wspr_dbm);
+				wspr_phase = 0;
+				wspr_tx_left = WSPR_TOTAL;
+				ft8_tx_nsamples = 1; // sentinel: cleared when wspr finishes
+				tx_on(TX_SOFT);
+				sprintf(note, "WSPR TX: %s (110s)\n", ft8_tx_text + 5);
+				write_console(FONT_FT8_QUEUED, note);
+			}
+		}
+		else if (!wspr_decoding){
+			wspr_rx_idx = 0;
+			wspr_capturing = 1;
+			write_console(FONT_LOG, "WSPR: listening this slot\n");
+		}
+	}
+	if (wspr_capturing && (t->tm_min % 2) == 1 && t->tm_sec >= 55){
+		wspr_capturing = 0;
+		wspr_dump_and_decode();
+	}
+	if (wspr_decoding && access("/tmp/wspr_done", F_OK) == 0){
+		wspr_decoding = 0;
+		unlink("/tmp/wspr_done");
+		wspr_report_spots();
+	}
+}
+
+// the wspr command: on/off/duty%. Enabling QSYs to the band's WSPR dial.
+void wspr_ctl(const char *args){
+	char note[120];
+	if (args && !strcmp(args, "off")){
+		wspr_active = 0;
+		wspr_tx_left = 0;
+		wspr_capturing = 0;
+		write_console(FONT_LOG, "WSPR off\n");
+		return;
+	}
+	if (args && strlen(args) && isdigit(args[0])){
+		wspr_pct = atoi(args);
+		if (wspr_pct > 100) wspr_pct = 100;
+		sprintf(note, "WSPR TX duty: %d%% of slots\n", wspr_pct);
+		write_console(FONT_LOG, note);
+		if (wspr_active) return;
+	}
+	if (!wspr_rx_buf)
+		wspr_rx_buf = malloc(WSPR_RX_SAMPLES * 2);
+	// nearest WSPR dial for the current band (USB dial frequencies)
+	static const long wd[] = {1836600,3568600,5287200,7038600,10138700,
+		14095600,18104600,21094600,24924600,28124600};
+	long best = wd[5], d = 999999999;
+	for (unsigned i = 0; i < sizeof(wd)/sizeof(wd[0]); i++){
+		long df = labs((long)freq_hdr - wd[i]);
+		if (df < d){ d = df; best = wd[i]; }
+	}
+	wspr_active = 1;
+	{	char fcmd[40];
+		sprintf(fcmd, "freq %ld", best);
+		cmd_exec(fcmd);
+	}
+	sprintf(note, "WSPR on: dial %.4f MHz, TX %d%% of even slots, %d dBm\n",
+		best / 1e6, wspr_pct, wspr_dbm);
+	write_console(FONT_LOG, note);
+	write_console(FONT_LOG, "set AUTO to OFF while running WSPR\n");
+}
+
+void wspr_selftest(){
+	char myg[8], note[120];
+	strncpy(myg, field_str("MYGRID"), 4); myg[4] = 0;
+	if (wspr_encode(field_str("MYCALLSIGN"), myg, wspr_dbm, wspr_syms)){
+		write_console(FONT_LOG, "WSPR encode FAILED\n");
+		return;
+	}
+	FILE *f = fopen("/tmp/wspr_syms.txt", "w");
+	for (int i = 0; i < 162; i++)
+		fprintf(f, "%d ", wspr_syms[i]);
+	fclose(f);
+	sprintf(note, "WSPR symbols for %s %s %d -> /tmp/wspr_syms.txt\n",
+		field_str("MYCALLSIGN"), myg, wspr_dbm);
+	write_console(FONT_LOG, note);
+}
+
+
 void sdr_request(char *request, char *response);
 #define HUNT_MAX 512
 static struct { char call[14]; int tries; time_t next_ok;
@@ -1442,6 +1707,11 @@ void *ft8_thread_function(void *ptr){
 
 // the ft8 sampling is at 12000, the incoming samples are at
 // 96000 samples/sec
+static void wspr_rx_tap(int32_t s){
+	if (wspr_capturing && wspr_rx_buf && wspr_rx_idx < WSPR_RX_SAMPLES)
+		wspr_rx_buf[wspr_rx_idx++] = (short)(s >> 13); // full 16-bit headroom
+}
+
 void ft8_rx(int32_t *samples, int count){
 
 	int decimation_ratio = 96000/12000;
@@ -1453,9 +1723,10 @@ void ft8_rx(int32_t *samples, int count){
 	}
 
 	//down convert to 12000 Hz sampling rate
-	for (int i = 0; i < count; i += decimation_ratio)
-		//ft8_rx_buff[ft8_rx_buff_index++] = samples[i];
+	for (int i = 0; i < count; i += decimation_ratio){
 		ft8_rx_buffer[ft8_rx_buff_index++] = samples[i] / 200000000.0f;
+		wspr_rx_tap(samples[i]);
+	}
 
 	int now = time_sbitx();
 	if (now != wallclock)	
@@ -1483,6 +1754,7 @@ void ft8_poll(int seconds, int tx_is_on){
 	ft8_hunt_active = hunt_mode_on();
 	const char *fa_str = field_str("FT8_AUTO");
 	int cq_mode = fa_str && (!strcmp(fa_str, "CQ") || !strcmp(fa_str, "CQHUNT"));
+	wspr_tick(tx_is_on);
 	// the FT8 tone has no business on the speaker: mute AUDIO for the
 	// duration of every transmission, restore the moment it ends
 	static int tx_audio_saved = -1;
@@ -1536,7 +1808,7 @@ void ft8_poll(int seconds, int tx_is_on){
 		if (fwdpower > 20 && vswr > 0) tx_settled_vswr10 = vswr;
 		// live SWR probe: the first seconds of every auto TX are the test.
 		// sustained SWR > 1.9 kills the transmission NOW, not at its end.
-		if ((ft8_hunt_active || cq_mode) && fwdpower > 20){ // >2W out: bridge reading is valid
+		if ((ft8_hunt_active || cq_mode || wspr_active) && fwdpower > 20){ // >2W out: bridge reading is valid
 			if (vswr > 19){
 				if (!swr_bad_since)
 					swr_bad_since = time(NULL);
@@ -1571,7 +1843,7 @@ void ft8_poll(int seconds, int tx_is_on){
 				ft8_log_csv("TXEND", freq_hdr, 0, 0, ft8_pitch, last_tx_pw10, last_tx_vswr10, ft8_tx_text);
 				tx_peak_pw10 = 0;
 				// settled end-of-TX SWR: a tuner's brief retune spikes are ignored
-				if ((ft8_hunt_active || cq_mode) && tx_settled_vswr10 > 19){
+				if ((ft8_hunt_active || cq_mode || wspr_active) && tx_settled_vswr10 > 19){
 					char sn[96];
 					sprintf(sn, "SWR %d.%d high! auto TX stopped on %s for 1h (swrclear undoes)\n",
 						tx_settled_vswr10/10, tx_settled_vswr10%10, band_tag_of(freq_hdr));
@@ -1616,7 +1888,10 @@ void ft8_poll(int seconds, int tx_is_on){
 	} 
 }
 
+
 float ft8_next_sample(){
+	if (wspr_tx_left > 0)
+		return wspr_next_sample();
 		float sample = 0;
 		if (ft8_tx_buff_index/8 < ft8_tx_nsamples){
 			sample = ft8_tx_buff[ft8_tx_buff_index/8]/7;
@@ -1903,4 +2178,5 @@ void ft8_abort(){
 	ft8_tx_nsamples = 0;
 	ft8_repeat = 0;
 	ft8_pending_qso[0] = 0;
+	wspr_tx_left = 0;
 }

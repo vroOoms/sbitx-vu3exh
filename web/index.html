@@ -296,7 +296,11 @@
 				<ol size="10" class="sbitx-list-box">
 				</ol>
 			</div>
-			<div id="hunt-queue-box" class="sbitx-list-container">
+			<div id="radio-log-box" class="sbitx-list-container">
+        Radio log
+        <ol class="sbitx-list-box" id="radio-log"></ol>
+    </div>
+    <div id="hunt-queue-box" class="sbitx-list-container">
         Queue <span id="hq-count"></span>
         <ol class="sbitx-list-box" id="hunt-queue"></ol>
     </div>
@@ -458,7 +462,8 @@
 		><button class="sbitxv3-btn macro-btn" id="F8">F8</button
 		><button class="sbitxv3-btn macro-btn" id="F9">F9</button
 		><button class="sbitxv3-btn macro-btn" id="F10">F10</button>
-		<button class="sbitxv3-btn" id="wf3-toggle">3D</button
+		<button class="sbitxv3-btn" id="mute-toggle">MUTE</button
+		><button class="sbitxv3-btn" id="wf3-toggle">3D</button
 		><button class="sbitxv3-btn" id="keyb-toggle">KEYB</button
 		><button class="sbitxv3-btn" id="logs-open">LOG</button
 		><button class="sbitxv3-btn" id="map-open">MAP</button
@@ -466,7 +471,7 @@
 		><button class="sbitxv3-btn" id="telnet-open">TEL</button
 		><button class="sbitxv3-btn" id="recorder-open">REC</button
 		><button class="sbitxv3-btn" id="settings-open">SET</button>
-		<span id="uiver" style="color:#666;font-size:11px;margin-left:6px">ui v47</span>
+		<span id="uiver" style="color:#666;font-size:11px;margin-left:6px">ui v59</span>
 		<input type="text" class="sbitx-text-input sbitx-text-field" 
 			id="TEXT" placeholder="TEXT\CMD" size="20" />
 		</div><!-- end of more_keys -->
@@ -2273,6 +2278,26 @@ $("#map-open").on("click", function(){ window.open("/map.html", "_blank"); });
 var kbd_enabled = false;
 $("#keyb-toggle").on("click", function(){ kbd_enabled = !kbd_enabled; $("#keybd").toggle(kbd_enabled); });
 $("#wf3-toggle").on("click", function(){ websocket_send("wf"); });
+var web_muted = false;
+$("#mute-toggle").on("click", function(){
+	web_muted = !web_muted;
+	if (player != null && player.volume) player.volume(web_muted ? 0 : 1);
+	this.textContent = web_muted ? "UNMUTE" : "MUTE";
+	this.style.background = web_muted ? "#7a2020" : "";
+});
+function rlog_add(t){
+	var ol = el("radio-log");
+	if (!ol || !t) return;
+	var li = document.createElement("li");
+	li.className = "sbitx-list-item";
+	var d = new Date();
+	li.textContent = ("0"+d.getHours()).slice(-2) + ":" +
+		("0"+d.getMinutes()).slice(-2) + " " + t.replace(/\n/g, " ");
+	ol.appendChild(li);
+	while (ol.children.length > 400)
+		ol.removeChild(ol.firstChild);
+	ol.parentNode.scrollTop = ol.parentNode.scrollHeight;
+}
 function hq_refresh(){
 	fetch('/data/queue.json?t=' + Date.now()).then(function(r){ return r.ok ? r.json() : []; })
 	.then(function(q){
@@ -2320,6 +2345,7 @@ function cq_caller_of(tokens){
 var CMD_LIST = [
  ["", "pick a command...", ""],
  ["cq", "Call CQ now", "Sends one CQ on the clearest audio offset. AUTO=CQ keeps calling automatically"],
+ ["wspr", "WSPR mode", "QSYs to the band WSPR dial; listens every even slot, transmits a 110s beacon on some (wspr 0..100 sets duty, wspr off stops). Spots go to wsprnet.org"],
  ["net", "Network status", "Shows every network device (wlan0/eth0), its IP addresses and the connected WiFi name"],
  ["swrclear", "Clear SWR blocks", "Lifts the 1-hour auto-TX bans set by the SWR guard - use after your antenna tuner retunes"],
  ["ftbest", "Best FT8 band", "Checks PSK Reporter for live FT8 activity near you, reports spots per band"],
@@ -2542,6 +2568,7 @@ function toggle_dial(event){
 }
 
 function write_console(str){
+	rlog_add(str);
 	var con = $("#console");
 	con[0].innerHTML = str;
 	con.fadeIn(0);
