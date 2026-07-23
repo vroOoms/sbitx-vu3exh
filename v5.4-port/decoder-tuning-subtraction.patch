@@ -1,0 +1,141 @@
+--- modem_ft8.c.stockbak	2026-07-24 02:24:41.961744716 +0530
++++ modem_ft8.c	2026-07-24 02:54:40.229383653 +0530
+@@ -67,14 +67,15 @@
+ // This file should change less often; if a new country is omitted, we simply won't abbreviate its name.
+ static const char* abbrev_location = "clu/share/clu/abbrev.tsv";
+ 
+-static const int kMin_score = 10; // Minimum sync score threshold for candidates
+-static const int kMax_candidates = 120;
+-static const int kLDPC_iterations = 20;
++static const int kMin_score = 5;  // tuned: stock 10 misses weak signals
++static const int kMax_candidates = 400; // tuned: stock 120 saturates busy bands
++static const int kLDPC_iterations = 30; // tuned: more belief-propagation passes
+ 
+ static const int kMax_decoded_messages = 50;
+ 
+ static const int kFreq_osr = 2; // Frequency oversampling rate (bin subdivision)
+-static const int kTime_osr = 2; // Time oversampling rate (symbol subdivision)
++static const int kTime_osr = 4; // tuned: finer timing resolution for weak sync
++static int kSubtract_passes = 3;   // decode -> subtract -> re-search residue
+ 
+ // styles to use for each enum value in ftx_field_t
+ static const int kFieldType_style_map[] = {
+@@ -621,6 +622,37 @@
+ 	return ret;
+ }
+ 
++static void ftx_subtract_signal(float *sig, int num_samples,
++    const ftx_message_t *msg, float freq_hz, float time_sec,
++    int sample_rate, float symbol_period, bool is_ft8)
++{
++    int n_tones = is_ft8 ? FT8_NN : FT4_NN;
++    uint8_t tones[FT8_NN > FT4_NN ? FT8_NN : FT4_NN];
++    if (is_ft8) ft8_encode(msg->payload, tones);
++    else        ft4_encode(msg->payload, tones);
++    int spsym = (int)(symbol_period * sample_rate + 0.5f);
++    float spacing = 1.0f / symbol_period;
++    int start = (int)(time_sec * sample_rate + 0.5f);
++    for (int k = 0; k < n_tones; k++){
++        int i0 = start + k * spsym;
++        if (i0 < 0 || i0 + spsym > num_samples) continue;
++        double w = 2.0 * M_PI * (freq_hz + tones[k] * spacing) / sample_rate;
++        double cw = cos(w), sw = sin(w);
++        double cs = cos(w * i0), sn = sin(w * i0);
++        double sc = 0, ss = 0, t;
++        for (int n = 0; n < spsym; n++){
++            sc += sig[i0 + n] * cs; ss += sig[i0 + n] * sn;
++            t = cs*cw - sn*sw; sn = cs*sw + sn*cw; cs = t;
++        }
++        double ac = 2.0*sc/spsym, as = 2.0*ss/spsym;
++        cs = cos(w*i0); sn = sin(w*i0);
++        for (int n = 0; n < spsym; n++){
++            sig[i0 + n] -= (float)(ac*cs + as*sn);
++            t = cs*cw - sn*sw; sn = cs*sw + sn*cw; cs = t;
++        }
++    }
++}
++
+ static int sbitx_ft8_decode(float *signal, int num_samples)
+ {
+     int sample_rate = 12000;
+@@ -662,20 +694,11 @@
+ 	double mylat, mylon;
+ 	bool myloc_ok = !locator2longlat(&mylon, &mylat, mygrid);
+ 
+-    monitor_init(&mon, &mon_cfg);
+-
+-    // Process the waveform data frame by frame - you could have a live loop here with data from an audio device
+-    for (int frame_pos = 0; frame_pos + mon.block_size <= num_samples; frame_pos += mon.block_size)
+-        monitor_process(&mon, signal + frame_pos);
+-
+-//    LOG(LOG_DEBUG, "Waterfall accumulated %d symbols\n", mon.wf.num_blocks);
+-//    LOG(LOG_INFO, "Max magnitude: %.1f dB\n", mon.max_mag);
+-
+-    // Find top candidates by Costas sync score and localize them in time and frequency
+-    ftx_candidate_t candidate_list[kMax_candidates];
+-    int num_candidates = ftx_find_candidates(&mon.wf, kMax_candidates, candidate_list, kMin_score);
+-
+-    // Hash table for decoded messages (to check for duplicates)
++    static float *work_sig = NULL; static int work_cap = 0;
++    if (work_cap < num_samples){ float *nw = realloc(work_sig, num_samples*sizeof(float)); if (nw){ work_sig = nw; work_cap = num_samples; } }
++    if (work_sig && work_cap >= num_samples){ memcpy(work_sig, signal, num_samples*sizeof(float)); signal = work_sig; }
++    struct sub_entry { ftx_message_t msg; float freq_hz, time_sec; } sub_list[64];
++    int n_sub = 0;
+ 	typedef struct
+ 	{
+ 		int last_qso_age;
+@@ -696,6 +719,22 @@
+ 	// Initialize hash table pointers
+ 	memset(decoded_hashtable, 0, sizeof(decoded_hashtable));
+ 
++    for (int subpass = 0; subpass < kSubtract_passes; subpass++){
++    n_sub = 0;
++    monitor_init(&mon, &mon_cfg);
++
++    // Process the waveform data frame by frame - you could have a live loop here with data from an audio device
++    for (int frame_pos = 0; frame_pos + mon.block_size <= num_samples; frame_pos += mon.block_size)
++        monitor_process(&mon, signal + frame_pos);
++
++//    LOG(LOG_DEBUG, "Waterfall accumulated %d symbols\n", mon.wf.num_blocks);
++//    LOG(LOG_INFO, "Max magnitude: %.1f dB\n", mon.max_mag);
++
++    // Find top candidates by Costas sync score and localize them in time and frequency
++    ftx_candidate_t candidate_list[kMax_candidates];
++    int num_candidates = ftx_find_candidates(&mon.wf, kMax_candidates, candidate_list, kMin_score);
++
++
+     // Go over candidates and attempt to decode messages
+     for (int idx = 0; idx < num_candidates; ++idx)
+     {
+@@ -745,6 +784,7 @@
+ 			memcpy(&decoded[idx_hash].message, &message, sizeof(message));
+ 			decoded_hashtable[idx_hash] = &decoded[idx_hash];
+ 			++num_decoded;
++			if (n_sub < 64){ sub_list[n_sub].msg = message; sub_list[n_sub].freq_hz = freq_hz; sub_list[n_sub].time_sec = time_sec; n_sub++; }
+ 
+ 			char text[FTX_MAX_MESSAGE_LENGTH];
+ 			ftx_message_offsets_t spans;
+@@ -995,6 +1035,15 @@
+ 	if (crc_mismatches)
+ 		LOG(LOG_DEBUG, "Decoded %d messages; %d CRC mismatches\n", num_decoded, crc_mismatches);
+ 
++    if (subpass + 1 < kSubtract_passes && n_sub > 0)
++        for (int si = 0; si < n_sub; si++)
++            ftx_subtract_signal(signal, num_samples, &sub_list[si].msg,
++                sub_list[si].freq_hz, sub_list[si].time_sec, sample_rate,
++                mon.symbol_period, is_ft8);
++    monitor_free(&mon);
++    if (n_sub == 0) break;
++    } // end subtraction pass loop
++
+ 	// If we are in autorespond mode and in idle state (i.e. no message planned to transmit),
+ 	// try to answer the CQ message on the highest_priority_row in the console, if found.
+ 	if (highest_priority_row > 0 && highest_priority >= 0 && !strcmp(field_str("FTX_AUTO"), "CQRESP")) {
+@@ -1041,7 +1090,6 @@
+ 	// completely autonomous ft8 bot), according to the preferences of the user.
+ 	// If that gets done, we can add ROBOT to the list of modes for FTX_AUTO (see sbitx_gtk.c:1110)
+ 
+-    monitor_free(&mon);
+     hashtable_cleanup(10);
+ 
+     // Send status update after decode cycle
